@@ -10,6 +10,11 @@ import {
   products, brands, brandDescriptions, menSubcategories, womenSubcategories,
   money, allColors, heroImages,
 } from './data';
+import { AuthModal } from './AuthModal';
+import { useAuth } from './hooks/useAuth';
+import { signOut } from './lib/auth';
+
+
 
 type View = 'home' | 'shop' | 'brands' | 'wishlist' | 'orders' | 'orderDetail' | 'account' | 'seller' | 'admin';
 type Role = 'customer' | 'seller' | 'admin';
@@ -65,8 +70,11 @@ function App() {
   const [orderDetailId, setOrderDetailId] = useState<string | null>(null);
   const [sellerTab, setSellerTab] = useState('overview');
   const [adminTab, setAdminTab] = useState('overview');
+  
   const [searchFocused, setSearchFocused] = useState(false);
-  const searchRef = useRef<HTMLDivElement>(null);
+    const [authModalOpen, setAuthModalOpen] = useState(false);
+    const { profile, refresh: refreshAuth } = useAuth();
+    const searchRef = useRef<HTMLDivElement>(null);
 
   const showToast = (msg: string) => { setToast(msg); setTimeout(() => setToast(''), 3000); };
 
@@ -242,7 +250,7 @@ function App() {
     {view === 'wishlist' && <Wishlist items={products.filter((p) => wishlist.includes(p.id))} onProduct={setSelected} toggleWish={toggleWish} onMoveToCart={addToCart} />}
     {view === 'orders' && <Orders orders={orders} onView={(id) => { setOrderDetailId(id); navTo('orderDetail'); }} />}
     {view === 'orderDetail' && orderDetail && <OrderDetail order={orderDetail} onBack={() => navTo('orders')} />}
-    {view === 'account' && <Account role={role} setRole={setRole} onSeller={() => { setView('seller'); }} onAdmin={() => { setView('admin'); }} orders={orders} onViewOrder={(id) => { setOrderDetailId(id); navTo('orderDetail'); }} />}
+    {view === 'account' && <Account role={role} setRole={setRole} onSeller={() => { setView('seller'); }} onAdmin={() => { setView('admin'); }} orders={orders} onViewOrder={(id) => { setOrderDetailId(id); navTo('orderDetail'); }} profile={profile} onLoginClick={() => setAuthModalOpen(true)} onLogout={async () => { await signOut(); refreshAuth(); }} />}
     {view === 'seller' && <SellerDashboard tab={sellerTab} setTab={setSellerTab} onBack={() => navTo('home')} orders={orders} products={products.filter((p) => p.seller === 'Urban Thread Store')} onProduct={setSelected} onViewOrder={(id) => { setOrderDetailId(id); navTo('orderDetail'); }} />}
     {view === 'admin' && <AdminDashboard tab={adminTab} setTab={setAdminTab} onBack={() => navTo('home')} orders={orders} products={products} onViewOrder={(id) => { setOrderDetailId(id); navTo('orderDetail'); }} />}
 
@@ -251,8 +259,10 @@ function App() {
     {cartOpen && <CartDrawer cart={cart} setCart={setCart} subtotal={subtotal} onClose={() => setCartOpen(false)} onCheckout={() => { setCartOpen(false); setCheckout(true); }} />}
     {checkout && <Checkout subtotal={subtotal} cart={cart} onClose={() => setCheckout(false)} onComplete={placeOrder} />}
     {toast && <div className="toast"><Check size={16} />{toast}<button onClick={() => setToast('')}><X size={14} /></button></div>}
+       {authModalOpen && <AuthModal onClose={() => setAuthModalOpen(false)} onSuccess={() => { setAuthModalOpen(false); refreshAuth(); }} />}
   </div>;
 }
+  
 
 // === BREADCRUMBS ===
 function Breadcrumbs({ items, onNav }: { items: { label: string; onClick?: () => void }[] }) {
@@ -772,10 +782,19 @@ function OrderDetail({ order, onBack }: { order: Order; onBack: () => void }) {
 }
 
 // === ACCOUNT ===
-function Account({ role, setRole, onSeller, onAdmin, orders, onViewOrder }: { role: Role; setRole: (r: Role) => void; onSeller: () => void; onAdmin: () => void; orders: Order[]; onViewOrder: (id: string) => void }) {
+function Account({ role, setRole, onSeller, onAdmin, orders, onViewOrder, profile, onLoginClick, onLogout }: { role: Role; setRole: (r: Role) => void; onSeller: () => void; onAdmin: () => void; orders: Order[]; onViewOrder: (id: string) => void; profile: import('./lib/auth').AuthProfile | null; onLoginClick: () => void; onLogout: () => void }) {
+  if (!profile) {
+    return <main className="account-page">
+      <div className="account-hero"><div className="avatar">?</div><div><p className="eyebrow">You're not logged in</p><h1>Welcome to Threadly</h1><p>Log in or create an account to view your orders and wishlist.</p></div></div>
+      <button className="button button-dark" onClick={onLoginClick}>Log in / Sign up</button>
+    </main>;
+  }
+  const initials = (profile.fullName || profile.email).slice(0, 2).toUpperCase();
   return <main className="account-page">
-    <div className="account-hero"><div className="avatar">AR</div><div><p className="eyebrow">Welcome back</p><h1>Alex Rivera</h1><p>alex.rivera@example.com</p></div></div>
+    <div className="account-hero"><div className="avatar">{initials}</div><div><p className="eyebrow">Welcome back</p><h1>{profile.fullName || profile.email}</h1><p>{profile.email}</p></div></div>
+    <button className="text-button" onClick={onLogout} style={{ marginBottom: 16 }}>Log out</button>
     <div className="role-switch"><span>Demo role:</span>{(['customer', 'seller', 'admin'] as const).map((r) => <button className={role === r ? 'active' : ''} key={r} onClick={() => { setRole(r); if (r === 'seller') onSeller(); else if (r === 'admin') onAdmin(); }}>{r}</button>)}</div>
+    
     <div className="account-grid">
       <div className="account-card"><p className="eyebrow">Recent orders</p><h2>{orders.length}</h2><p>{orders.length === 0 ? 'No orders yet.' : `Last order: ${orders[0].id}`}</p>{orders.length > 0 && <button className="text-button" onClick={() => onViewOrder(orders[0].id)}>View latest <ArrowRight size={15} /></button>}</div>
       <div className="account-card"><p className="eyebrow">Your details</p><h2>Profile</h2><p>Manage your name, email, phone and saved addresses.</p><button className="text-button">Manage profile <ArrowRight size={15} /></button></div>
