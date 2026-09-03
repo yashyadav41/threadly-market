@@ -188,6 +188,11 @@ function App() {
   const buyNow = (product: Product, size: string, color: string) => {
     addToCart(product, size, color, 1);
     setSelected(null);
+    startCheckout();
+  };
+
+  const startCheckout = () => {
+    if (!profile) { setAuthModalOpen(true); showToast('Please log in to place an order'); return; }
     setCheckout(true);
   };
 
@@ -300,7 +305,7 @@ function App() {
 
     {view !== 'seller' && view !== 'admin' && <Footer onSeller={() => navTo('seller')} onCategory={navShop} />}
     {selected && <ProductModal product={selected} onClose={() => setSelected(null)} onAdd={addToCart} onBuy={buyNow} isWishlisted={wishlist.includes(selected.id)} toggleWish={toggleWish} related={products.filter((p) => p.subcategory === selected.subcategory && p.gender === selected.gender && p.id !== selected.id).slice(0, 4)} onProduct={setSelected} />}
-    {cartOpen && <CartDrawer cart={cart} setCart={setCart} subtotal={subtotal} onClose={() => setCartOpen(false)} onCheckout={() => { setCartOpen(false); setCheckout(true); }} />}
+    {cartOpen && <CartDrawer cart={cart} setCart={setCart} subtotal={subtotal} onClose={() => setCartOpen(false)} onCheckout={() => { setCartOpen(false); startCheckout(); }} />}
     {checkout && <Checkout subtotal={subtotal} cart={cart} onClose={() => setCheckout(false)} onComplete={placeOrder} />}
     {toast && <div className="toast"><Check size={16} />{toast}<button onClick={() => setToast('')}><X size={14} /></button></div>}
        {authModalOpen && <AuthModal onClose={() => setAuthModalOpen(false)} onSuccess={() => { setAuthModalOpen(false); refreshAuth(); }} />}
