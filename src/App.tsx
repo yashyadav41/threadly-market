@@ -7,13 +7,13 @@ import {
 } from 'lucide-react';
 import {
   type Product, type CartItem, type Order, type OrderItem, type Gender,
-  products, brands, brandDescriptions, menSubcategories, womenSubcategories,
+  products as mockProducts, brands, brandDescriptions, menSubcategories, womenSubcategories,
   money, allColors, heroImages,
 } from './data';
 import { AuthModal } from './AuthModal';
 import { useAuth } from './hooks/useAuth';
 import { signOut } from './lib/auth';
-
+import { fetchProducts } from './lib/products';
 
 
 type View = 'home' | 'shop' | 'brands' | 'wishlist' | 'orders' | 'orderDetail' | 'account' | 'seller' | 'admin';
@@ -71,10 +71,19 @@ function App() {
   const [sellerTab, setSellerTab] = useState('overview');
   const [adminTab, setAdminTab] = useState('overview');
   
-  const [searchFocused, setSearchFocused] = useState(false);
-    const [authModalOpen, setAuthModalOpen] = useState(false);
-    const { profile, refresh: refreshAuth } = useAuth();
-    const searchRef = useRef<HTMLDivElement>(null);
+    const [searchFocused, setSearchFocused] = useState(false);
+     const [authModalOpen, setAuthModalOpen] = useState(false);
+      const { profile, refresh: refreshAuth } = useAuth();
+      const searchRef = useRef<HTMLDivElement>(null);
+      const [liveProducts, setLiveProducts] = useState<Product[]>(mockProducts);
+      const products = liveProducts;
+      useEffect(() => {
+         let active = true;
+         fetchProducts()
+          .then((live) => { if (active && live.length > 0) setLiveProducts(live); })
+         .catch((err) => { console.error('Falling back to demo products:', err); });
+        return () => { active = false; };
+       }, []);
 
   const showToast = (msg: string) => { setToast(msg); setTimeout(() => setToast(''), 3000); };
 
@@ -243,8 +252,8 @@ function App() {
         <button className="icon-btn" onClick={() => setCartOpen(true)} aria-label="Bag"><ShoppingBag size={20} /><sup>{cartCount}</sup></button>
       </div>
     </header>
-
-    {view === 'home' && <Home onShop={() => navShop('All')} onProduct={setSelected} onBrand={(b) => { setShop({ ...DEFAULT_SHOP, selectedBrands: [b] }); navTo('shop'); }} onCategory={navShop} />}
+    
+    {view === 'home' && <Home products={products} onShop={() => navShop('All')} onProduct={setSelected} onBrand={(b) => { setShop({ ...DEFAULT_SHOP, selectedBrands: [b] }); navTo('shop'); }} onCategory={navShop} />}
     {view === 'shop' && <Shop products={filtered} shop={shop} setShop={setShop} onProduct={setSelected} wishlist={wishlist} toggleWish={toggleWish} onNavShop={navShop} />}
     {view === 'brands' && <Brands onBrand={(b) => { setShop({ ...DEFAULT_SHOP, selectedBrands: [b] }); navTo('shop'); }} />}
     {view === 'wishlist' && <Wishlist items={products.filter((p) => wishlist.includes(p.id))} onProduct={setSelected} toggleWish={toggleWish} onMoveToCart={addToCart} />}
@@ -275,7 +284,7 @@ function Breadcrumbs({ items, onNav }: { items: { label: string; onClick?: () =>
 }
 
 // === HOME ===
-function Home({ onShop, onProduct, onBrand, onCategory }: { onShop: () => void; onProduct: (p: Product) => void; onBrand: (b: string) => void; onCategory: (g: string, s?: string) => void }) {
+function Home({ products, onShop, onProduct, onBrand, onCategory }: { products: Product[]; onShop: () => void; onProduct: (p: Product) => void; onBrand: (b: string) => void; onCategory: (g: string, s?: string) => void }) {
   const [heroIdx, setHeroIdx] = useState(0);
   useEffect(() => { const t = setInterval(() => setHeroIdx((i) => (i + 1) % heroImages.length), 5000); return () => clearInterval(t); }, []);
   return <main>
@@ -495,7 +504,7 @@ function Brands({ onBrand }: { onBrand: (b: string) => void }) {
 function Wishlist({ items, onProduct, toggleWish, onMoveToCart }: { items: Product[]; onProduct: (p: Product) => void; toggleWish: (n: number) => void; onMoveToCart: (p: Product, s: string, c: string) => void }) {
   return <main className="shop-page">
     <div className="page-intro compact">
-      <Breadcrumbs items={[{ label: 'Home', onClick: () => onProduct(items[0] || products[0]) }, { label: 'Wishlist' }]} />
+    <Breadcrumbs items={[{ label: 'Home', onClick: () => { if (items[0]) onProduct(items[0]); } }, { label: 'Wishlist' }]} />
       <h1>Wishlist</h1>
       <p>{items.length} {items.length === 1 ? 'piece' : 'pieces'} waiting for you.</p>
     </div>
