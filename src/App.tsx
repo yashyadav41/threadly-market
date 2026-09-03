@@ -14,6 +14,9 @@ import { AuthModal } from './AuthModal';
 import { useAuth } from './hooks/useAuth';
 import { signOut } from './lib/auth';
 import { fetchProducts } from './lib/products';
+import { fetchCartRows, replaceCartRows } from './lib/cart';
+import { fetchWishlistIds, replaceWishlistIds } from './lib/wishlist';
+
 
 
 type View = 'home' | 'shop' | 'brands' | 'wishlist' | 'orders' | 'orderDetail' | 'account' | 'seller' | 'admin';
@@ -58,7 +61,49 @@ function App() {
   const [view, setView] = useState<View>('home');
   const [shop, setShop] = useState<ShopState>(DEFAULT_SHOP);
   const [cart, setCart] = useState<CartItem[]>([]);
-  const [wishlist, setWishlist] = useState<number[]>([22, 34]);
+  const [wishlist, setWishlist] = useState<string[]>([]);
+  const [liveProducts, setLiveProducts] = useState<Product[]>(mockProducts);
+  const products = liveProducts;
+  const { profile, refresh: refreshAuth } = useAuth();
+  useEffect(() => {
+    let active = true;
+    fetchProducts()
+      .then((live) => { if (active && live.length > 0) setLiveProducts(live); })
+      .catch((err) => { console.error('Falling back to demo products:', err); });
+    return () => { active = false; };
+  }, []);
+
+  // === CART/WISHLIST <-> SUPABASE SYNC ===
+  const cartLoadedRef = useRef(false);
+  useEffect(() => {
+    if (!profile) { cartLoadedRef.current = false; return; }
+    cartLoadedRef.current = false;
+    let active = true;
+    Promise.all([fetchCartRows(profile.id), fetchWishlistIds(profile.id)]).then(([cartRows, wishIds]) => {
+      if (!active) return;
+      const restoredCart: CartItem[] = cartRows
+        .map((row) => {
+          const product = products.find((p) => p.id === row.product_id);
+          return product ? { ...product, size: row.size, color: row.color, quantity: row.quantity } : null;
+        })
+        .filter((c): c is CartItem => c !== null);
+      setCart(restoredCart);
+      setWishlist(wishIds);
+      cartLoadedRef.current = true;
+    });
+    return () => { active = false; };
+  }, [profile?.id, products]);
+
+  useEffect(() => {
+    if (!profile || !cartLoadedRef.current) return;
+    replaceCartRows(profile.id, cart.map((c) => ({ product_id: c.id, size: c.size, color: c.color, quantity: c.quantity })));
+  }, [cart, profile]);
+
+  useEffect(() => {
+    if (!profile || !cartLoadedRef.current) return;
+    replaceWishlistIds(profile.id, wishlist);
+  }, [wishlist, profile]);
+
   const [selected, setSelected] = useState<Product | null>(null);
   const [cartOpen, setCartOpen] = useState(false);
   const [mobileNav, setMobileNav] = useState(false);
@@ -71,19 +116,9 @@ function App() {
   const [sellerTab, setSellerTab] = useState('overview');
   const [adminTab, setAdminTab] = useState('overview');
   
-    const [searchFocused, setSearchFocused] = useState(false);
-     const [authModalOpen, setAuthModalOpen] = useState(false);
-      const { profile, refresh: refreshAuth } = useAuth();
-      const searchRef = useRef<HTMLDivElement>(null);
-      const [liveProducts, setLiveProducts] = useState<Product[]>(mockProducts);
-      const products = liveProducts;
-      useEffect(() => {
-         let active = true;
-         fetchProducts()
-          .then((live) => { if (active && live.length > 0) setLiveProducts(live); })
-         .catch((err) => { console.error('Falling back to demo products:', err); });
-        return () => { active = false; };
-       }, []);
+  const [searchFocused, setSearchFocused] = useState(false);
+    const [authModalOpen, setAuthModalOpen] = useState(false);
+    const searchRef = useRef<HTMLDivElement>(null);
 
   const showToast = (msg: string) => { setToast(msg); setTimeout(() => setToast(''), 3000); };
 
@@ -156,7 +191,7 @@ function App() {
     setCheckout(true);
   };
 
-  const toggleWish = (id: number) => {
+  const toggleWish = (id: string) => {
     setWishlist((items) => items.includes(id) ? items.filter((i) => i !== id) : [...items, id]);
     showToast(wishlist.includes(id) ? 'Removed from wishlist' : 'Saved to wishlist');
   };
@@ -252,7 +287,7 @@ function App() {
         <button className="icon-btn" onClick={() => setCartOpen(true)} aria-label="Bag"><ShoppingBag size={20} /><sup>{cartCount}</sup></button>
       </div>
     </header>
-    
+
     {view === 'home' && <Home products={products} onShop={() => navShop('All')} onProduct={setSelected} onBrand={(b) => { setShop({ ...DEFAULT_SHOP, selectedBrands: [b] }); navTo('shop'); }} onCategory={navShop} />}
     {view === 'shop' && <Shop products={filtered} shop={shop} setShop={setShop} onProduct={setSelected} wishlist={wishlist} toggleWish={toggleWish} onNavShop={navShop} />}
     {view === 'brands' && <Brands onBrand={(b) => { setShop({ ...DEFAULT_SHOP, selectedBrands: [b] }); navTo('shop'); }} />}
@@ -358,7 +393,7 @@ function SectionHeading({ eyebrow, title, action, onClick }: { eyebrow: string; 
 }
 
 // === PRODUCT CARD ===
-function ProductCard({ product, onProduct, toggleWish, isWishlisted }: { product: Product; onProduct: (p: Product) => void; toggleWish?: (id: number) => void; isWishlisted?: boolean }) {
+function ProductCard({ product, onProduct, toggleWish, isWishlisted }: { product: Product; onProduct: (p: Product) => void; toggleWish?: (id: string) => void; isWishlisted?: boolean }) {
   return <article className="product-card">
     <div className="product-image" onClick={() => onProduct(product)}>
       <img src={product.image} alt={product.name} />
@@ -382,7 +417,7 @@ function ProductCard({ product, onProduct, toggleWish, isWishlisted }: { product
 // === SHOP with sidebar filters ===
 function Shop({ products: items, shop, setShop, onProduct, wishlist, toggleWish, onNavShop }: {
   products: Product[]; shop: ShopState; setShop: (s: ShopState) => void;
-  onProduct: (p: Product) => void; wishlist: number[]; toggleWish: (n: number) => void; onNavShop: (g: string, s?: string) => void;
+  onProduct: (p: Product) => void; wishlist: string[]; toggleWish: (n: string) => void; onNavShop: (g: string, s?: string) => void;
 }) {
   const [mobileFilterOpen, setMobileFilterOpen] = useState(false);
   const [sortOpen, setSortOpen] = useState(false);
@@ -501,10 +536,10 @@ function Brands({ onBrand }: { onBrand: (b: string) => void }) {
 }
 
 // === WISHLIST ===
-function Wishlist({ items, onProduct, toggleWish, onMoveToCart }: { items: Product[]; onProduct: (p: Product) => void; toggleWish: (n: number) => void; onMoveToCart: (p: Product, s: string, c: string) => void }) {
+function Wishlist({ items, onProduct, toggleWish, onMoveToCart }: { items: Product[]; onProduct: (p: Product) => void; toggleWish: (n: string) => void; onMoveToCart: (p: Product, s: string, c: string) => void }) {
   return <main className="shop-page">
     <div className="page-intro compact">
-    <Breadcrumbs items={[{ label: 'Home', onClick: () => { if (items[0]) onProduct(items[0]); } }, { label: 'Wishlist' }]} />
+      <Breadcrumbs items={[{ label: 'Home', onClick: () => { if (items[0]) onProduct(items[0]); } }, { label: 'Wishlist' }]} />
       <h1>Wishlist</h1>
       <p>{items.length} {items.length === 1 ? 'piece' : 'pieces'} waiting for you.</p>
     </div>
@@ -532,7 +567,7 @@ function Wishlist({ items, onProduct, toggleWish, onMoveToCart }: { items: Produ
 // === PRODUCT DETAIL MODAL ===
 function ProductModal({ product, onClose, onAdd, onBuy, isWishlisted, toggleWish, related, onProduct }: {
   product: Product; onClose: () => void; onAdd: (p: Product, s: string, c: string, q?: number) => void; onBuy: (p: Product, s: string, c: string) => void;
-  isWishlisted: boolean; toggleWish: (n: number) => void; related: Product[]; onProduct: (p: Product) => void;
+  isWishlisted: boolean; toggleWish: (n: string) => void; related: Product[]; onProduct: (p: Product) => void;
 }) {
   const [size, setSize] = useState(product.sizes[0]);
   const [color, setColor] = useState(product.colors[0]);
