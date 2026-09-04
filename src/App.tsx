@@ -16,6 +16,7 @@ import { signOut } from './lib/auth';
 import { fetchProducts } from './lib/products';
 import { fetchCartRows, replaceCartRows } from './lib/cart';
 import { fetchWishlistIds, replaceWishlistIds } from './lib/wishlist';
+import { placeOrderInDb, fetchOrdersForUser } from './lib/orders';
 
 
 
@@ -62,6 +63,7 @@ function App() {
   const [shop, setShop] = useState<ShopState>(DEFAULT_SHOP);
   const [cart, setCart] = useState<CartItem[]>([]);
   const [wishlist, setWishlist] = useState<string[]>([]);
+  const [orders, setOrders] = useState<Order[]>([]);
   const [liveProducts, setLiveProducts] = useState<Product[]>(mockProducts);
   const products = liveProducts;
   const { profile, refresh: refreshAuth } = useAuth();
@@ -104,12 +106,20 @@ function App() {
     replaceWishlistIds(profile.id, wishlist);
   }, [wishlist, profile]);
 
+  useEffect(() => {
+    if (!profile) return;
+    let active = true;
+    fetchOrdersForUser(profile.id, profile.fullName || profile.email).then((fetched) => {
+      if (active && fetched.length > 0) setOrders(fetched);
+    });
+    return () => { active = false; };
+  }, [profile?.id]);
+
   const [selected, setSelected] = useState<Product | null>(null);
   const [cartOpen, setCartOpen] = useState(false);
   const [mobileNav, setMobileNav] = useState(false);
   const [dropdown, setDropdown] = useState<string | null>(null);
   const [checkout, setCheckout] = useState(false);
-  const [orders, setOrders] = useState<Order[]>([]);
   const [role, setRole] = useState<Role>('customer');
   const [toast, setToast] = useState('');
   const [orderDetailId, setOrderDetailId] = useState<string | null>(null);
@@ -186,7 +196,7 @@ function App() {
   };
 
   const buyNow = (product: Product, size: string, color: string) => {
-    addToCart(product, size, color, 1);
+    setBuyNowItem({ ...product, size, color, quantity: 1 });
     setSelected(null);
     startCheckout();
   };
@@ -202,25 +212,44 @@ function App() {
   };
 
   const subtotal = cart.reduce((s, i) => s + i.price * i.quantity, 0);
+  const [buyNowItem, setBuyNowItem] = useState<CartItem | null>(null);
+  const checkoutItems = buyNowItem ? [buyNowItem] : cart;
+  const checkoutSubtotal = checkoutItems.reduce((s, i) => s + i.price * i.quantity, 0);
   const cartCount = cart.reduce((a, b) => a + b.quantity, 0);
 
-  const placeOrder = (method: PaymentMethod, address: { name: string; phone: string; address: string; city: string; postal: string }) => {
-    const orderItems: OrderItem[] = cart.map((item) => ({
+  const placeOrder = async (method: PaymentMethod, address: { name: string; phone: string; address: string; city: string; postal: string }) => {
+    const orderItems: OrderItem[] = checkoutItems.map((item) => ({
       productId: item.id, name: item.name, brand: item.brand, image: item.image,
       size: item.size, color: item.color, quantity: item.quantity, price: item.price, seller: item.seller,
     }));
     const sub = orderItems.reduce((s, i) => s + i.price * i.quantity, 0);
     const ship = sub >= 1499 ? 0 : 99;
+
+    if (!profile) { showToast('Please log in to place an order'); return; }
+
+    try {
+      await placeOrderInDb({
+        userId: profile.id,
+        items: checkoutItems.map((c) => ({ id: c.id, name: c.name, price: c.price, quantity: c.quantity, size: c.size, color: c.color })),
+        subtotal: sub, discount: 0, shipping: ship, total: sub + ship,
+        paymentMethod: method, address,
+      });
+    } catch (err) {
+      console.error('placeOrderInDb failed:', err);
+      showToast('Something went wrong placing your order. Please try again.');
+      return;
+    }
+
     const order: Order = {
       id: 'TH-' + Math.random().toString(36).substring(2, 8).toUpperCase(),
       items: orderItems, subtotal: sub, discount: 0, shipping: ship, total: sub + ship,
       paymentMethod: method,
       paymentLabel: method === 'demo_card' ? 'Demo Card' : method === 'demo_upi' ? 'Demo UPI' : 'Cash on Delivery',
       status: 'Confirmed', date: new Date().toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' }),
-      customer: 'Alex Rivera', address,
+      customer: profile.fullName || profile.email, address,
     };
     setOrders((prev) => [order, ...prev]);
-    setCart([]);
+    if (buyNowItem) { setBuyNowItem(null); } else { setCart([]); }
     setCheckout(false);
     showToast('Order placed successfully');
     setView('orders');
@@ -306,7 +335,7 @@ function App() {
     {view !== 'seller' && view !== 'admin' && <Footer onSeller={() => navTo('seller')} onCategory={navShop} />}
     {selected && <ProductModal product={selected} onClose={() => setSelected(null)} onAdd={addToCart} onBuy={buyNow} isWishlisted={wishlist.includes(selected.id)} toggleWish={toggleWish} related={products.filter((p) => p.subcategory === selected.subcategory && p.gender === selected.gender && p.id !== selected.id).slice(0, 4)} onProduct={setSelected} />}
     {cartOpen && <CartDrawer cart={cart} setCart={setCart} subtotal={subtotal} onClose={() => setCartOpen(false)} onCheckout={() => { setCartOpen(false); startCheckout(); }} />}
-    {checkout && <Checkout subtotal={subtotal} cart={cart} onClose={() => setCheckout(false)} onComplete={placeOrder} />}
+    {checkout && <Checkout subtotal={checkoutSubtotal} cart={checkoutItems} onClose={() => { setCheckout(false); setBuyNowItem(null); }} onComplete={placeOrder} />}
     {toast && <div className="toast"><Check size={16} />{toast}<button onClick={() => setToast('')}><X size={14} /></button></div>}
        {authModalOpen && <AuthModal onClose={() => setAuthModalOpen(false)} onSuccess={() => { setAuthModalOpen(false); refreshAuth(); }} />}
   </div>;
