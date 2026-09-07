@@ -2037,3 +2037,9 @@ a { color: inherit; text-decoration: none; }
 .auth-error { color: #b3391f; font-size: 12.5px; margin: -4px 0 0; }
 .auth-switch { text-align: center; font-size: 13px; color: #625d56; margin-top: 20px; }
 .auth-switch .text-button { display: inline; padding: 0; margin-left: 2px; }
+/* === PRODUCT FORM MODAL === */
+.product-form-box { max-height: 85vh; overflow-y: auto; }
+.product-form .form-row { display: flex; gap: 12px; }
+.product-form .form-row .profile-field { flex: 1; }
+.product-form select { width: 100%; padding: 10px 12px; border: 1px solid #ddd8d0; border-radius: 6px; background: #fff; font: inherit; }
+.product-form textarea { min-height: 80px; }

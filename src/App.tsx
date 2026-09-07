@@ -7,12 +7,17 @@ import {
 } from 'lucide-react';
 import {
   type Product, type CartItem, type Order, type OrderItem, type Gender,
-  products, brands, brandDescriptions, menSubcategories, womenSubcategories,
+  products as mockProducts, brands, brandDescriptions, menSubcategories, womenSubcategories,
   money, allColors, heroImages,
 } from './data';
 import { AuthModal } from './AuthModal';
 import { useAuth } from './hooks/useAuth';
 import { signOut } from './lib/auth';
+import { fetchProducts } from './lib/products';
+import { fetchCartRows, replaceCartRows } from './lib/cart';
+import { fetchWishlistIds, replaceWishlistIds } from './lib/wishlist';
+import { placeOrderInDb, fetchOrdersForUser } from './lib/orders';
+import { fetchSellerByUserId, updateSellerDescription, insertProduct, updateProduct, type SellerRecord } from './lib/sellers';
 
 
 
@@ -58,13 +63,73 @@ function App() {
   const [view, setView] = useState<View>('home');
   const [shop, setShop] = useState<ShopState>(DEFAULT_SHOP);
   const [cart, setCart] = useState<CartItem[]>([]);
-  const [wishlist, setWishlist] = useState<number[]>([22, 34]);
+  const [wishlist, setWishlist] = useState<string[]>([]);
+  const [orders, setOrders] = useState<Order[]>([]);
+  const [liveProducts, setLiveProducts] = useState<Product[]>(mockProducts);
+  const products = liveProducts;
+  const { profile, refresh: refreshAuth } = useAuth();
+  const refreshProducts = () => {
+    fetchProducts()
+      .then((live) => { if (live.length > 0) setLiveProducts(live); })
+      .catch((err) => { console.error('Falling back to demo products:', err); });
+  };
+  useEffect(() => { refreshProducts(); }, []);
+
+  // === CART/WISHLIST <-> SUPABASE SYNC ===
+  const cartLoadedRef = useRef(false);
+  useEffect(() => {
+    if (!profile) { cartLoadedRef.current = false; return; }
+    cartLoadedRef.current = false;
+    let active = true;
+    Promise.all([fetchCartRows(profile.id), fetchWishlistIds(profile.id)]).then(([cartRows, wishIds]) => {
+      if (!active) return;
+      const restoredCart: CartItem[] = cartRows
+        .map((row) => {
+          const product = products.find((p) => p.id === row.product_id);
+          return product ? { ...product, size: row.size, color: row.color, quantity: row.quantity } : null;
+        })
+        .filter((c): c is CartItem => c !== null);
+      setCart(restoredCart);
+      setWishlist(wishIds);
+      cartLoadedRef.current = true;
+    });
+    return () => { active = false; };
+  }, [profile?.id, products]);
+
+  useEffect(() => {
+    if (!profile || !cartLoadedRef.current) return;
+    replaceCartRows(profile.id, cart.map((c) => ({ product_id: c.id, size: c.size, color: c.color, quantity: c.quantity })));
+  }, [cart, profile]);
+
+  useEffect(() => {
+    if (!profile || !cartLoadedRef.current) return;
+    replaceWishlistIds(profile.id, wishlist);
+  }, [wishlist, profile]);
+
+  useEffect(() => {
+    if (!profile) return;
+    let active = true;
+    fetchOrdersForUser(profile.id, profile.fullName || profile.email).then((fetched) => {
+      if (active && fetched.length > 0) setOrders(fetched);
+    });
+    return () => { active = false; };
+  }, [profile?.id]);
+
+  const [sellerRecord, setSellerRecord] = useState<SellerRecord | null>(null);
+  useEffect(() => {
+    if (!profile) { setSellerRecord(null); return; }
+    let active = true;
+    fetchSellerByUserId(profile.id).then((s) => { if (active) setSellerRecord(s); });
+    return () => { active = false; };
+  }, [profile?.id]);
+
+  const [productForm, setProductForm] = useState<{ mode: 'add' | 'edit'; product?: Product } | null>(null);
+
   const [selected, setSelected] = useState<Product | null>(null);
   const [cartOpen, setCartOpen] = useState(false);
   const [mobileNav, setMobileNav] = useState(false);
   const [dropdown, setDropdown] = useState<string | null>(null);
   const [checkout, setCheckout] = useState(false);
-  const [orders, setOrders] = useState<Order[]>([]);
   const [role, setRole] = useState<Role>('customer');
   const [toast, setToast] = useState('');
   const [orderDetailId, setOrderDetailId] = useState<string | null>(null);
@@ -73,7 +138,6 @@ function App() {
   
   const [searchFocused, setSearchFocused] = useState(false);
     const [authModalOpen, setAuthModalOpen] = useState(false);
-    const { profile, refresh: refreshAuth } = useAuth();
     const searchRef = useRef<HTMLDivElement>(null);
 
   const showToast = (msg: string) => { setToast(msg); setTimeout(() => setToast(''), 3000); };
@@ -142,36 +206,60 @@ function App() {
   };
 
   const buyNow = (product: Product, size: string, color: string) => {
-    addToCart(product, size, color, 1);
+    setBuyNowItem({ ...product, size, color, quantity: 1 });
     setSelected(null);
+    startCheckout();
+  };
+
+  const startCheckout = () => {
+    if (!profile) { setAuthModalOpen(true); showToast('Please log in to place an order'); return; }
     setCheckout(true);
   };
 
-  const toggleWish = (id: number) => {
+  const toggleWish = (id: string) => {
     setWishlist((items) => items.includes(id) ? items.filter((i) => i !== id) : [...items, id]);
     showToast(wishlist.includes(id) ? 'Removed from wishlist' : 'Saved to wishlist');
   };
 
   const subtotal = cart.reduce((s, i) => s + i.price * i.quantity, 0);
+  const [buyNowItem, setBuyNowItem] = useState<CartItem | null>(null);
+  const checkoutItems = buyNowItem ? [buyNowItem] : cart;
+  const checkoutSubtotal = checkoutItems.reduce((s, i) => s + i.price * i.quantity, 0);
   const cartCount = cart.reduce((a, b) => a + b.quantity, 0);
 
-  const placeOrder = (method: PaymentMethod, address: { name: string; phone: string; address: string; city: string; postal: string }) => {
-    const orderItems: OrderItem[] = cart.map((item) => ({
+  const placeOrder = async (method: PaymentMethod, address: { name: string; phone: string; address: string; city: string; postal: string }) => {
+    const orderItems: OrderItem[] = checkoutItems.map((item) => ({
       productId: item.id, name: item.name, brand: item.brand, image: item.image,
       size: item.size, color: item.color, quantity: item.quantity, price: item.price, seller: item.seller,
     }));
     const sub = orderItems.reduce((s, i) => s + i.price * i.quantity, 0);
     const ship = sub >= 1499 ? 0 : 99;
+
+    if (!profile) { showToast('Please log in to place an order'); return; }
+
+    try {
+      await placeOrderInDb({
+        userId: profile.id,
+        items: checkoutItems.map((c) => ({ id: c.id, name: c.name, price: c.price, quantity: c.quantity, size: c.size, color: c.color })),
+        subtotal: sub, discount: 0, shipping: ship, total: sub + ship,
+        paymentMethod: method, address,
+      });
+    } catch (err) {
+      console.error('placeOrderInDb failed:', err);
+      showToast('Something went wrong placing your order. Please try again.');
+      return;
+    }
+
     const order: Order = {
       id: 'TH-' + Math.random().toString(36).substring(2, 8).toUpperCase(),
       items: orderItems, subtotal: sub, discount: 0, shipping: ship, total: sub + ship,
       paymentMethod: method,
       paymentLabel: method === 'demo_card' ? 'Demo Card' : method === 'demo_upi' ? 'Demo UPI' : 'Cash on Delivery',
       status: 'Confirmed', date: new Date().toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' }),
-      customer: 'Alex Rivera', address,
+      customer: profile.fullName || profile.email, address,
     };
     setOrders((prev) => [order, ...prev]);
-    setCart([]);
+    if (buyNowItem) { setBuyNowItem(null); } else { setCart([]); }
     setCheckout(false);
     showToast('Order placed successfully');
     setView('orders');
@@ -244,22 +332,30 @@ function App() {
       </div>
     </header>
 
-    {view === 'home' && <Home onShop={() => navShop('All')} onProduct={setSelected} onBrand={(b) => { setShop({ ...DEFAULT_SHOP, selectedBrands: [b] }); navTo('shop'); }} onCategory={navShop} />}
+    {view === 'home' && <Home products={products} onShop={() => navShop('All')} onProduct={setSelected} onBrand={(b) => { setShop({ ...DEFAULT_SHOP, selectedBrands: [b] }); navTo('shop'); }} onCategory={navShop} />}
     {view === 'shop' && <Shop products={filtered} shop={shop} setShop={setShop} onProduct={setSelected} wishlist={wishlist} toggleWish={toggleWish} onNavShop={navShop} />}
     {view === 'brands' && <Brands onBrand={(b) => { setShop({ ...DEFAULT_SHOP, selectedBrands: [b] }); navTo('shop'); }} />}
     {view === 'wishlist' && <Wishlist items={products.filter((p) => wishlist.includes(p.id))} onProduct={setSelected} toggleWish={toggleWish} onMoveToCart={addToCart} />}
     {view === 'orders' && <Orders orders={orders} onView={(id) => { setOrderDetailId(id); navTo('orderDetail'); }} />}
     {view === 'orderDetail' && orderDetail && <OrderDetail order={orderDetail} onBack={() => navTo('orders')} />}
     {view === 'account' && <Account role={role} setRole={setRole} onSeller={() => { setView('seller'); }} onAdmin={() => { setView('admin'); }} orders={orders} onViewOrder={(id) => { setOrderDetailId(id); navTo('orderDetail'); }} profile={profile} onLoginClick={() => setAuthModalOpen(true)} onLogout={async () => { await signOut(); refreshAuth(); }} />}
-    {view === 'seller' && <SellerDashboard tab={sellerTab} setTab={setSellerTab} onBack={() => navTo('home')} orders={orders} products={products.filter((p) => p.seller === 'Urban Thread Store')} onProduct={setSelected} onViewOrder={(id) => { setOrderDetailId(id); navTo('orderDetail'); }} />}
+    {view === 'seller' && <SellerDashboard tab={sellerTab} setTab={setSellerTab} onBack={() => navTo('home')} orders={orders} products={sellerRecord ? products.filter((p) => p.seller === sellerRecord.business_name) : []} allProducts={products} seller={sellerRecord} onProduct={setSelected} onViewOrder={(id) => { setOrderDetailId(id); navTo('orderDetail'); }} onAddProduct={() => setProductForm({ mode: 'add' })} onEditProduct={(p) => setProductForm({ mode: 'edit', product: p })} onSaveProfile={async (desc) => { if (!sellerRecord) return; try { await updateSellerDescription(sellerRecord.id, desc); setSellerRecord({ ...sellerRecord, description: desc }); showToast('Store profile updated'); } catch { showToast('Failed to update profile'); } }} />}
     {view === 'admin' && <AdminDashboard tab={adminTab} setTab={setAdminTab} onBack={() => navTo('home')} orders={orders} products={products} onViewOrder={(id) => { setOrderDetailId(id); navTo('orderDetail'); }} />}
 
     {view !== 'seller' && view !== 'admin' && <Footer onSeller={() => navTo('seller')} onCategory={navShop} />}
     {selected && <ProductModal product={selected} onClose={() => setSelected(null)} onAdd={addToCart} onBuy={buyNow} isWishlisted={wishlist.includes(selected.id)} toggleWish={toggleWish} related={products.filter((p) => p.subcategory === selected.subcategory && p.gender === selected.gender && p.id !== selected.id).slice(0, 4)} onProduct={setSelected} />}
-    {cartOpen && <CartDrawer cart={cart} setCart={setCart} subtotal={subtotal} onClose={() => setCartOpen(false)} onCheckout={() => { setCartOpen(false); setCheckout(true); }} />}
-    {checkout && <Checkout subtotal={subtotal} cart={cart} onClose={() => setCheckout(false)} onComplete={placeOrder} />}
+    {cartOpen && <CartDrawer cart={cart} setCart={setCart} subtotal={subtotal} onClose={() => setCartOpen(false)} onCheckout={() => { setCartOpen(false); startCheckout(); }} />}
+    {checkout && <Checkout subtotal={checkoutSubtotal} cart={checkoutItems} onClose={() => { setCheckout(false); setBuyNowItem(null); }} onComplete={placeOrder} />}
     {toast && <div className="toast"><Check size={16} />{toast}<button onClick={() => setToast('')}><X size={14} /></button></div>}
        {authModalOpen && <AuthModal onClose={() => setAuthModalOpen(false)} onSuccess={() => { setAuthModalOpen(false); refreshAuth(); }} />}
+    {productForm && sellerRecord && <ProductFormModal
+      mode={productForm.mode}
+      product={productForm.product}
+      sellerId={sellerRecord.id}
+      allProducts={products}
+      onClose={() => setProductForm(null)}
+      onSaved={() => { setProductForm(null); refreshProducts(); showToast(productForm.mode === 'add' ? 'Product added' : 'Product updated'); }}
+    />}
   </div>;
 }
   
@@ -275,7 +371,7 @@ function Breadcrumbs({ items, onNav }: { items: { label: string; onClick?: () =>
 }
 
 // === HOME ===
-function Home({ onShop, onProduct, onBrand, onCategory }: { onShop: () => void; onProduct: (p: Product) => void; onBrand: (b: string) => void; onCategory: (g: string, s?: string) => void }) {
+function Home({ products, onShop, onProduct, onBrand, onCategory }: { products: Product[]; onShop: () => void; onProduct: (p: Product) => void; onBrand: (b: string) => void; onCategory: (g: string, s?: string) => void }) {
   const [heroIdx, setHeroIdx] = useState(0);
   useEffect(() => { const t = setInterval(() => setHeroIdx((i) => (i + 1) % heroImages.length), 5000); return () => clearInterval(t); }, []);
   return <main>
@@ -349,7 +445,7 @@ function SectionHeading({ eyebrow, title, action, onClick }: { eyebrow: string; 
 }
 
 // === PRODUCT CARD ===
-function ProductCard({ product, onProduct, toggleWish, isWishlisted }: { product: Product; onProduct: (p: Product) => void; toggleWish?: (id: number) => void; isWishlisted?: boolean }) {
+function ProductCard({ product, onProduct, toggleWish, isWishlisted }: { product: Product; onProduct: (p: Product) => void; toggleWish?: (id: string) => void; isWishlisted?: boolean }) {
   return <article className="product-card">
     <div className="product-image" onClick={() => onProduct(product)}>
       <img src={product.image} alt={product.name} />
@@ -373,7 +469,7 @@ function ProductCard({ product, onProduct, toggleWish, isWishlisted }: { product
 // === SHOP with sidebar filters ===
 function Shop({ products: items, shop, setShop, onProduct, wishlist, toggleWish, onNavShop }: {
   products: Product[]; shop: ShopState; setShop: (s: ShopState) => void;
-  onProduct: (p: Product) => void; wishlist: number[]; toggleWish: (n: number) => void; onNavShop: (g: string, s?: string) => void;
+  onProduct: (p: Product) => void; wishlist: string[]; toggleWish: (n: string) => void; onNavShop: (g: string, s?: string) => void;
 }) {
   const [mobileFilterOpen, setMobileFilterOpen] = useState(false);
   const [sortOpen, setSortOpen] = useState(false);
@@ -492,10 +588,10 @@ function Brands({ onBrand }: { onBrand: (b: string) => void }) {
 }
 
 // === WISHLIST ===
-function Wishlist({ items, onProduct, toggleWish, onMoveToCart }: { items: Product[]; onProduct: (p: Product) => void; toggleWish: (n: number) => void; onMoveToCart: (p: Product, s: string, c: string) => void }) {
+function Wishlist({ items, onProduct, toggleWish, onMoveToCart }: { items: Product[]; onProduct: (p: Product) => void; toggleWish: (n: string) => void; onMoveToCart: (p: Product, s: string, c: string) => void }) {
   return <main className="shop-page">
     <div className="page-intro compact">
-      <Breadcrumbs items={[{ label: 'Home', onClick: () => onProduct(items[0] || products[0]) }, { label: 'Wishlist' }]} />
+      <Breadcrumbs items={[{ label: 'Home', onClick: () => { if (items[0]) onProduct(items[0]); } }, { label: 'Wishlist' }]} />
       <h1>Wishlist</h1>
       <p>{items.length} {items.length === 1 ? 'piece' : 'pieces'} waiting for you.</p>
     </div>
@@ -523,7 +619,7 @@ function Wishlist({ items, onProduct, toggleWish, onMoveToCart }: { items: Produ
 // === PRODUCT DETAIL MODAL ===
 function ProductModal({ product, onClose, onAdd, onBuy, isWishlisted, toggleWish, related, onProduct }: {
   product: Product; onClose: () => void; onAdd: (p: Product, s: string, c: string, q?: number) => void; onBuy: (p: Product, s: string, c: string) => void;
-  isWishlisted: boolean; toggleWish: (n: number) => void; related: Product[]; onProduct: (p: Product) => void;
+  isWishlisted: boolean; toggleWish: (n: string) => void; related: Product[]; onProduct: (p: Product) => void;
 }) {
   const [size, setSize] = useState(product.sizes[0]);
   const [color, setColor] = useState(product.colors[0]);
@@ -804,21 +900,103 @@ function Account({ role, setRole, onSeller, onAdmin, orders, onViewOrder, profil
 }
 
 // === SELLER DASHBOARD ===
-function SellerDashboard({ tab, setTab, onBack, orders, products, onProduct, onViewOrder }: {
-  tab: string; setTab: (t: string) => void; onBack: () => void; orders: Order[]; products: Product[]; onProduct: (p: Product) => void; onViewOrder: (id: string) => void;
+// === PRODUCT FORM MODAL (seller add/edit) ===
+function ProductFormModal({ mode, product, sellerId, allProducts, onClose, onSaved }: {
+  mode: 'add' | 'edit'; product?: Product; sellerId: string; allProducts: Product[]; onClose: () => void; onSaved: () => void;
 }) {
-  const sellerOrders = orders.filter((o) => o.items.some((i) => i.seller === 'Urban Thread Store'));
-  const sellerOrderItems = sellerOrders.flatMap((o) => o.items.filter((i) => i.seller === 'Urban Thread Store').map((i) => ({ ...i, orderId: o.id, date: o.date, status: o.status, customer: o.customer, paymentLabel: o.paymentLabel })));
+  const [name, setName] = useState(product?.name ?? '');
+  const [brand, setBrand] = useState(product?.brand ?? brands[0]);
+  const [gender, setGender] = useState<Gender>(product?.gender ?? 'Men');
+  const [subcategory, setSubcategory] = useState(product?.subcategory ?? '');
+  const [price, setPrice] = useState(String(product?.price ?? ''));
+  const [original, setOriginal] = useState(String(product?.original ?? ''));
+  const [stock, setStock] = useState(String(product?.stock ?? ''));
+  const [sizes, setSizes] = useState(product?.sizes.join(', ') ?? '');
+  const [colors, setColors] = useState(product?.colors.join(', ') ?? '');
+  const [material, setMaterial] = useState(product?.material ?? '');
+  const [description, setDescription] = useState(product?.description ?? '');
+  const [image, setImage] = useState(product?.image ?? '');
+  const [error, setError] = useState('');
+  const [submitting, setSubmitting] = useState(false);
+
+  const subcategoryOptions = [...new Set(allProducts.filter((p) => p.gender === gender).map((p) => p.subcategory))];
+
+  async function handleSubmit(e: React.FormEvent) {
+    e.preventDefault();
+    setError('');
+    if (!name || !subcategory || !price || !stock || !sizes || !colors || !image) {
+      setError('Please fill in all required fields.');
+      return;
+    }
+    const input = {
+      name, brand, gender, subcategory,
+      price: Number(price), original: Number(original) || Number(price), stock: Number(stock),
+      sizes: sizes.split(',').map((s) => s.trim()).filter(Boolean),
+      colors: colors.split(',').map((c) => c.trim()).filter(Boolean),
+      material, description, image,
+    };
+    setSubmitting(true);
+    try {
+      if (mode === 'add') await insertProduct(sellerId, input);
+      else if (product) await updateProduct(product.id, sellerId, input);
+      onSaved();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Something went wrong.');
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  return <div className="modal-backdrop" onClick={onClose}>
+    <div className="auth-modal-box" style={{ width: 'min(560px, 100%)', maxHeight: '85vh', overflowY: 'auto' }} onClick={(e) => e.stopPropagation()}>
+      <button className="close-btn" onClick={onClose} aria-label="Close"><X size={18} /></button>
+      <p className="eyebrow">{mode === 'add' ? 'New listing' : 'Edit listing'}</p>
+      <h2>{mode === 'add' ? 'Add a product' : 'Edit product'}</h2>
+      <form onSubmit={handleSubmit} className="auth-form">
+        <div className="profile-field"><label>Product name *</label><input value={name} onChange={(e) => setName(e.target.value)} /></div>
+        <div className="profile-field"><label>Brand *</label><select value={brand} onChange={(e) => setBrand(e.target.value)}>{brands.map((b) => <option key={b} value={b}>{b}</option>)}</select></div>
+        <div className="profile-field"><label>Gender *</label><select value={gender} onChange={(e) => { setGender(e.target.value as Gender); setSubcategory(''); }}><option value="Men">Men</option><option value="Women">Women</option><option value="Kids">Kids</option></select></div>
+        <div className="profile-field"><label>Category *</label><select value={subcategory} onChange={(e) => setSubcategory(e.target.value)}><option value="">Select…</option>{subcategoryOptions.map((s) => <option key={s} value={s}>{s}</option>)}</select></div>
+        <div className="profile-field"><label>Price (₹) *</label><input type="number" value={price} onChange={(e) => setPrice(e.target.value)} /></div>
+        <div className="profile-field"><label>Original price (₹, optional — for sale badge)</label><input type="number" value={original} onChange={(e) => setOriginal(e.target.value)} /></div>
+        <div className="profile-field"><label>Stock *</label><input type="number" value={stock} onChange={(e) => setStock(e.target.value)} /></div>
+        <div className="profile-field"><label>Sizes * (comma separated, e.g. S, M, L, XL)</label><input value={sizes} onChange={(e) => setSizes(e.target.value)} /></div>
+        <div className="profile-field"><label>Colors * (comma separated)</label><input value={colors} onChange={(e) => setColors(e.target.value)} /></div>
+        <div className="profile-field"><label>Material</label><input value={material} onChange={(e) => setMaterial(e.target.value)} /></div>
+        <div className="profile-field"><label>Image URL *</label><input value={image} onChange={(e) => setImage(e.target.value)} placeholder="https://…" /></div>
+        <div className="profile-field"><label>Description</label><textarea value={description} onChange={(e) => setDescription(e.target.value)} /></div>
+        {error && <p className="auth-error">{error}</p>}
+        <button className="button button-dark" type="submit" disabled={submitting}>{submitting ? 'Saving…' : mode === 'add' ? 'Add product' : 'Save changes'}</button>
+      </form>
+    </div>
+  </div>;
+}
+
+function SellerDashboard({ tab, setTab, onBack, orders, products, allProducts, seller, onProduct, onViewOrder, onAddProduct, onEditProduct, onSaveProfile }: {
+  tab: string; setTab: (t: string) => void; onBack: () => void; orders: Order[]; products: Product[]; allProducts: Product[]; seller: SellerRecord | null; onProduct: (p: Product) => void; onViewOrder: (id: string) => void; onAddProduct: () => void; onEditProduct: (p: Product) => void; onSaveProfile: (description: string) => void;
+}) {
+  if (!seller) {
+    return <main className="dashboard-main" style={{ padding: 60, textAlign: 'center' }}>
+      <p className="eyebrow">No seller account</p>
+      <h1>This account isn't registered as a seller</h1>
+      <p>Log in with a seller account to manage a store.</p>
+      <button className="button button-dark" onClick={onBack} style={{ marginTop: 16 }}>Back to storefront</button>
+    </main>;
+  }
+  const sellerName = seller.business_name;
+  const sellerOrders = orders.filter((o) => o.items.some((i) => i.seller === sellerName));
+  const sellerOrderItems = sellerOrders.flatMap((o) => o.items.filter((i) => i.seller === sellerName).map((i) => ({ ...i, orderId: o.id, date: o.date, status: o.status, customer: o.customer, paymentLabel: o.paymentLabel })));
   const grossSales = sellerOrderItems.reduce((s, i) => s + i.price * i.quantity, 0);
   const commission = grossSales * COMMISSION_RATE;
   const netEarnings = grossSales - commission;
   const customers = [...new Set(sellerOrders.map((o) => o.customer))];
   const lowStock = products.filter((p) => p.stock < 15);
+  const [profileDesc, setProfileDesc] = useState(seller.description ?? '');
 
   return <main className="dashboard">
     <aside className="dashboard-side">
       <button className="wordmark" onClick={onBack}><span>THREADLY</span><small>MARKET</small></button>
-      <div className="dash-profile"><div className="avatar">UT</div><div><strong>Urban Thread</strong><span>Seller account</span></div></div>
+      <div className="dash-profile"><div className="avatar">{sellerName.slice(0, 2).toUpperCase()}</div><div><strong>{sellerName}</strong><span>Seller account</span></div></div>
       <nav>
         <button className={tab === 'overview' ? 'active' : ''} onClick={() => setTab('overview')}><LayoutDashboard size={17} />Overview</button>
         <button className={tab === 'products' ? 'active' : ''} onClick={() => setTab('products')}><Package size={17} />Products <span>{products.length}</span></button>
@@ -830,7 +1008,7 @@ function SellerDashboard({ tab, setTab, onBack, orders, products, onProduct, onV
       <button className="back-store" onClick={onBack}><ChevronLeft size={15} /> Back to storefront</button>
     </aside>
     <section className="dashboard-main">
-      {tab === 'overview' && (<><div className="dashboard-top"><div><p className="eyebrow">Store overview</p><h1>Urban Thread Dashboard</h1></div><button className="button button-dark"><Plus size={16} /> Add product</button></div>
+      {tab === 'overview' && (<><div className="dashboard-top"><div><p className="eyebrow">Store overview</p><h1>{sellerName} Dashboard</h1></div><button className="button button-dark" onClick={onAddProduct}><Plus size={16} /> Add product</button></div>
         <div className="stat-grid">
           <Stat label="Total Products" value={String(products.length)} sub={`${products.filter((p) => p.stock > 0).length} active`} icon={<Package />} onClick={() => setTab('products')} />
           <Stat label="Total Orders" value={String(sellerOrders.length)} sub={`${sellerOrderItems.length} items sold`} icon={<ShoppingBag />} onClick={() => setTab('orders')} />
@@ -847,12 +1025,12 @@ function SellerDashboard({ tab, setTab, onBack, orders, products, onProduct, onV
         {lowStock.length > 0 && <div className="low-stock-alert"><h3>Low stock alert</h3><div className="low-stock-list">{lowStock.map((p) => <div key={p.id} className="low-stock-item" onClick={() => onProduct(p)}><img src={p.image} alt={p.name} /><div><strong>{p.name}</strong><small>Only {p.stock} left</small></div></div>)}</div></div>}
       </>)}
 
-      {tab === 'products' && (<><div className="dashboard-top"><div><h1>My Products</h1><p>{products.length} products in your store</p></div><button className="button button-dark"><Plus size={16} /> Add product</button></div>
-        <div className="seller-product-list">{products.map((p) => <div key={p.id} className="seller-product-row" onClick={() => onProduct(p)}><img src={p.image} alt={p.name} /><div className="sp-info"><strong>{p.name}</strong><small>{p.brand} · {p.gender} · {p.subcategory}</small></div><div className="sp-price">{money(p.price)}</div><div className="sp-stock">{p.stock < 15 ? <span className="warn">Low: {p.stock}</span> : <span>{p.stock} in stock</span>}</div><div className="sp-actions"><button className="icon-btn-sm"><Edit size={15} /></button><button className="icon-btn-sm"><Eye size={15} /></button></div></div>)}</div>
+      {tab === 'products' && (<><div className="dashboard-top"><div><h1>My Products</h1><p>{products.length} products in your store</p></div><button className="button button-dark" onClick={onAddProduct}><Plus size={16} /> Add product</button></div>
+        <div className="seller-product-list">{products.map((p) => <div key={p.id} className="seller-product-row"><img src={p.image} alt={p.name} onClick={() => onProduct(p)} /><div className="sp-info" onClick={() => onProduct(p)}><strong>{p.name}</strong><small>{p.brand} · {p.gender} · {p.subcategory}</small></div><div className="sp-price">{money(p.price)}</div><div className="sp-stock">{p.stock < 15 ? <span className="warn">Low: {p.stock}</span> : <span>{p.stock} in stock</span>}</div><div className="sp-actions"><button className="icon-btn-sm" onClick={() => onEditProduct(p)}><Edit size={15} /></button><button className="icon-btn-sm" onClick={() => onProduct(p)}><Eye size={15} /></button></div></div>)}</div>
       </>)}
 
       {tab === 'orders' && (<><div className="dashboard-top"><div><h1>Orders</h1><p>{sellerOrders.length} orders containing your products</p></div></div>
-        {sellerOrders.length ? <div className="orders-list">{sellerOrders.map((o) => <div key={o.id} className="order-card" onClick={() => onViewOrder(o.id)}><div className="order-card-head"><div><strong>{o.id}</strong><small>{o.date}</small></div><span className={`order-status ${o.status.toLowerCase()}`}>{o.status}</span></div><div className="order-card-items">{o.items.filter((i) => i.seller === 'Urban Thread Store').map((item, i) => <div key={i} className="order-thumb"><img src={item.image} alt={item.name} /></div>)}</div><div className="order-card-foot"><span>{o.customer} · {o.paymentLabel}</span><strong>{money(o.items.filter((i) => i.seller === 'Urban Thread Store').reduce((s, i) => s + i.price * i.quantity, 0))}</strong></div></div>)}</div>
+        {sellerOrders.length ? <div className="orders-list">{sellerOrders.map((o) => <div key={o.id} className="order-card" onClick={() => onViewOrder(o.id)}><div className="order-card-head"><div><strong>{o.id}</strong><small>{o.date}</small></div><span className={`order-status ${o.status.toLowerCase()}`}>{o.status}</span></div><div className="order-card-items">{o.items.filter((i) => i.seller === sellerName).map((item, i) => <div key={i} className="order-thumb"><img src={item.image} alt={item.name} /></div>)}</div><div className="order-card-foot"><span>{o.customer} · {o.paymentLabel}</span><strong>{money(o.items.filter((i) => i.seller === sellerName).reduce((s, i) => s + i.price * i.quantity, 0))}</strong></div></div>)}</div>
           : <div className="empty-state"><Package size={28} /><h2>No orders yet</h2><p>Orders containing your products will appear here.</p></div>}
       </>)}
 
@@ -870,12 +1048,12 @@ function SellerDashboard({ tab, setTab, onBack, orders, products, onProduct, onV
       </>)}
 
       {tab === 'customers' && (<><div className="dashboard-top"><div><h1>Customers</h1><p>{customers.length} customers ordered your products</p></div></div>
-        {customers.length ? <div className="customer-list">{customers.map((c, i) => { const custOrders = sellerOrders.filter((o) => o.customer === c); const spent = custOrders.flatMap((o) => o.items.filter((i) => i.seller === 'Urban Thread Store')).reduce((s, i) => s + i.price * i.quantity, 0); return <div key={i} className="customer-card"><div className="avatar">{c.slice(0, 2).toUpperCase()}</div><div><strong>{c}</strong><small>{custOrders.length} orders · {money(spent)} spent</small></div></div>; })}</div>
+        {customers.length ? <div className="customer-list">{customers.map((c, i) => { const custOrders = sellerOrders.filter((o) => o.customer === c); const spent = custOrders.flatMap((o) => o.items.filter((i) => i.seller === sellerName)).reduce((s, i) => s + i.price * i.quantity, 0); return <div key={i} className="customer-card"><div className="avatar">{c.slice(0, 2).toUpperCase()}</div><div><strong>{c}</strong><small>{custOrders.length} orders · {money(spent)} spent</small></div></div>; })}</div>
           : <div className="empty-state"><Users size={28} /><h2>No customers yet</h2><p>Customers who buy your products will appear here.</p></div>}
       </>)}
 
       {tab === 'profile' && (<><div className="dashboard-top"><div><h1>Store Profile</h1></div></div>
-        <div className="profile-form"><div className="profile-field"><label>Business Name</label><input value="Urban Thread" readOnly /></div><div className="profile-field"><label>Description</label><textarea defaultValue="Contemporary casual wear designed for everyday life." /></div><div className="profile-field"><label>Commission Rate</label><input value="10% (set by admin)" readOnly /></div><div className="profile-field"><label>Status</label><span className="status approved"><CheckCircle size={14} /> Approved</span></div><button className="button button-dark">Save changes</button></div>
+        <div className="profile-form"><div className="profile-field"><label>Business Name</label><input value={sellerName} readOnly /></div><div className="profile-field"><label>Description</label><textarea value={profileDesc} onChange={(e) => setProfileDesc(e.target.value)} /></div><div className="profile-field"><label>Commission Rate</label><input value={`${seller.commission_rate}% (set by admin)`} readOnly /></div><div className="profile-field"><label>Status</label><span className={`status ${seller.status}`}><CheckCircle size={14} /> {seller.status.charAt(0).toUpperCase() + seller.status.slice(1)}</span></div><button className="button button-dark" onClick={() => onSaveProfile(profileDesc)}>Save changes</button></div>
       </>)}
     </section>
   </main>;

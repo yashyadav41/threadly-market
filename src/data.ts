@@ -2,7 +2,7 @@ export type Gender = 'Men' | 'Women' | 'Kids';
 export type SubCategory = 'Shirts' | 'T-Shirts' | 'Jeans' | 'Trousers' | 'Dresses' | 'Tops' | 'Jackets' | 'Hoodies' | 'Shoes' | 'Accessories';
 
 export interface Product {
-  id: number;
+  id: string;
   name: string;
   brand: string;
   category: string;
@@ -33,7 +33,7 @@ export interface CartItem extends Product {
 }
 
 export interface OrderItem {
-  productId: number;
+  productId: string;
   name: string;
   brand: string;
   image: string;
@@ -235,7 +235,7 @@ const rawProducts: RawProduct[] = [
 ];
 
 export const products: Product[] = rawProducts.map((p, i) => ({
-  id: i + 1,
+  id: `mock-${i + 1}`,
   name: p.name,
   brand: p.brand,
   category: p.sub,
