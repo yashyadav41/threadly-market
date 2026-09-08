@@ -23,7 +23,10 @@ export async function fetchCartRows(userId: string): Promise<CartRow[]> {
 
 /**
  * Replaces the user's entire saved cart with the given rows.
- * Simple "delete all, re-insert" approach — fine for typical cart sizes.
+ * Deletes rows no longer in the cart, then upserts the current rows
+ * (insert-or-update on the user+product+size+color unique key) —
+ * upsert instead of a plain insert avoids a duplicate-key error if
+ * two syncs happen to overlap in quick succession.
  */
 export async function replaceCartRows(userId: string, rows: CartRow[]): Promise<void> {
   const { error: delError } = await supabase.from('cart_items').delete().eq('user_id', userId);
@@ -33,6 +36,6 @@ export async function replaceCartRows(userId: string, rows: CartRow[]): Promise<
 
   const { error: insError } = await supabase
     .from('cart_items')
-    .insert(rows.map((r) => ({ user_id: userId, ...r })));
+    .upsert(rows.map((r) => ({ user_id: userId, ...r })), { onConflict: 'user_id,product_id,size,color' });
   if (insError) console.error('replaceCartRows insert failed:', insError.message);
 }
