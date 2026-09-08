@@ -65,25 +65,31 @@ export async function fetchAllApplications(): Promise<SellerApplication[]> {
  * seller's storefront row, and promotes their account role to 'seller'.
  */
 export async function approveApplication(app: SellerApplication): Promise<void> {
-  const { error: appError } = await supabase
+  const { data: appData, error: appError } = await supabase
     .from('seller_applications')
     .update({ status: 'approved' })
-    .eq('id', app.id);
+    .eq('id', app.id)
+    .select('id');
   if (appError) throw new Error(appError.message);
+  if (!appData || appData.length === 0) throw new Error('Application update matched no rows — check admin permissions.');
 
-  const { error: sellerError } = await supabase
+  const { data: sellerData, error: sellerError } = await supabase
     .from('sellers')
     .upsert(
       { user_id: app.user_id, business_name: app.business_name, description: app.description, status: 'approved' },
       { onConflict: 'user_id' }
-    );
+    )
+    .select('id');
   if (sellerError) throw new Error(sellerError.message);
+  if (!sellerData || sellerData.length === 0) throw new Error('Seller row was not created/updated — check admin permissions.');
 
-  const { error: roleError } = await supabase
+  const { data: roleData, error: roleError } = await supabase
     .from('user_roles')
     .update({ role: 'seller' })
-    .eq('user_id', app.user_id);
+    .eq('user_id', app.user_id)
+    .select('user_id');
   if (roleError) throw new Error(roleError.message);
+  if (!roleData || roleData.length === 0) throw new Error('user_roles update matched no rows — the applicant may be missing a user_roles row.');
 }
 
 export async function rejectApplication(appId: string): Promise<void> {
