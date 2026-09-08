@@ -20,6 +20,7 @@ import { placeOrderInDb, fetchOrdersForUser } from './lib/orders';
 import { fetchSellerByUserId, updateSellerDescription, insertProduct, updateProduct, type SellerRecord } from './lib/sellers';
 import { fetchMyApplication, submitApplication, fetchAllApplications, approveApplication, rejectApplication, type SellerApplication, type ApplicationInput } from './lib/sellerApplications';
 import { fetchAllSellers, setSellerStatus, fetchPendingProducts, setProductStatus, type AdminSellerRow, type PendingProduct } from './lib/admin';
+import { fetchReviewsForProduct, findReviewableOrderId, submitReview, type ReviewRow } from './lib/reviews';
 
 
 
@@ -387,7 +388,7 @@ function App() {
     />}
 
     {view !== 'seller' && view !== 'admin' && <Footer onSeller={goSeller} onCategory={navShop} />}
-    {selected && <ProductModal product={selected} onClose={() => setSelected(null)} onAdd={addToCart} onBuy={buyNow} isWishlisted={wishlist.includes(selected.id)} toggleWish={toggleWish} related={products.filter((p) => p.subcategory === selected.subcategory && p.gender === selected.gender && p.id !== selected.id).slice(0, 4)} onProduct={setSelected} />}
+    {selected && <ProductModal product={selected} onClose={() => setSelected(null)} onAdd={addToCart} onBuy={buyNow} isWishlisted={wishlist.includes(selected.id)} toggleWish={toggleWish} related={products.filter((p) => p.subcategory === selected.subcategory && p.gender === selected.gender && p.id !== selected.id).slice(0, 4)} onProduct={setSelected} profile={profile} />}
     {cartOpen && <CartDrawer cart={cart} setCart={setCart} subtotal={subtotal} onClose={() => setCartOpen(false)} onCheckout={() => { setCartOpen(false); startCheckout(); }} />}
     {checkout && <Checkout subtotal={checkoutSubtotal} cart={checkoutItems} onClose={() => { setCheckout(false); setBuyNowItem(null); }} onComplete={placeOrder} />}
     {toast && <div className="toast"><Check size={16} />{toast}<button onClick={() => setToast('')}><X size={14} /></button></div>}
@@ -661,9 +662,9 @@ function Wishlist({ items, onProduct, toggleWish, onMoveToCart }: { items: Produ
 }
 
 // === PRODUCT DETAIL MODAL ===
-function ProductModal({ product, onClose, onAdd, onBuy, isWishlisted, toggleWish, related, onProduct }: {
+function ProductModal({ product, onClose, onAdd, onBuy, isWishlisted, toggleWish, related, onProduct, profile }: {
   product: Product; onClose: () => void; onAdd: (p: Product, s: string, c: string, q?: number) => void; onBuy: (p: Product, s: string, c: string) => void;
-  isWishlisted: boolean; toggleWish: (n: string) => void; related: Product[]; onProduct: (p: Product) => void;
+  isWishlisted: boolean; toggleWish: (n: string) => void; related: Product[]; onProduct: (p: Product) => void; profile: import('./lib/auth').AuthProfile | null;
 }) {
   const [size, setSize] = useState(product.sizes[0]);
   const [color, setColor] = useState(product.colors[0]);
@@ -712,7 +713,82 @@ function ProductModal({ product, onClose, onAdd, onBuy, isWishlisted, toggleWish
           <img src={p.image} alt={p.name} /><div><p className="product-brand">{p.brand}</p><strong>{p.name}</strong><span className="price">{money(p.price)}</span></div>
         </button>)}</div>
       </div>}
+
+      <ProductReviews productId={product.id} profile={profile} />
     </div>
+  </div>;
+}
+
+// === PRODUCT REVIEWS ===
+function ProductReviews({ productId, profile }: { productId: string; profile: import('./lib/auth').AuthProfile | null }) {
+  const [reviews, setReviews] = useState<ReviewRow[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [reviewableOrderId, setReviewableOrderId] = useState<string | null>(null);
+  const [rating, setRating] = useState(5);
+  const [comment, setComment] = useState('');
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState('');
+
+  useEffect(() => {
+    let active = true;
+    setLoading(true);
+    fetchReviewsForProduct(productId).then((r) => { if (active) { setReviews(r); setLoading(false); } });
+    if (profile) {
+      findReviewableOrderId(profile.id, productId).then((id) => { if (active) setReviewableOrderId(id); });
+    } else {
+      setReviewableOrderId(null);
+    }
+    return () => { active = false; };
+  }, [productId, profile?.id]);
+
+  async function handleSubmit(e: React.FormEvent) {
+    e.preventDefault();
+    if (!profile || !reviewableOrderId || !comment.trim()) return;
+    setSubmitting(true);
+    setError('');
+    try {
+      await submitReview(profile.id, productId, reviewableOrderId, rating, comment.trim());
+      setComment('');
+      setReviewableOrderId(null);
+      fetchReviewsForProduct(productId).then(setReviews);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to submit review.');
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  const avg = reviews.length ? (reviews.reduce((s, r) => s + r.rating, 0) / reviews.length).toFixed(1) : null;
+
+  return <div className="modal-related">
+    <h3>Reviews {avg && <span style={{ fontWeight: 400, color: '#888' }}>· {avg} average · {reviews.length} review{reviews.length === 1 ? '' : 's'}</span>}</h3>
+
+    {reviewableOrderId && (
+      <form onSubmit={handleSubmit} className="auth-form" style={{ maxWidth: 480, marginBottom: 24 }}>
+        <div className="profile-field">
+          <label>Your rating</label>
+          <div style={{ display: 'flex', gap: 4 }}>
+            {[1, 2, 3, 4, 5].map((n) => <button key={n} type="button" onClick={() => setRating(n)} style={{ padding: 4 }}><Star size={22} fill={n <= rating ? 'currentColor' : 'none'} /></button>)}
+          </div>
+        </div>
+        <div className="profile-field"><label>Your review</label><textarea value={comment} onChange={(e) => setComment(e.target.value)} placeholder="How did this piece work out for you?" /></div>
+        {error && <p className="auth-error">{error}</p>}
+        <button className="button button-dark" type="submit" disabled={submitting} style={{ alignSelf: 'flex-start' }}>{submitting ? 'Posting…' : 'Post review'}</button>
+      </form>
+    )}
+
+    {loading ? <p className="empty-mini">Loading reviews…</p> : reviews.length === 0 ? <p className="empty-mini">No reviews yet — be the first to share your thoughts.</p> : (
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+        {reviews.map((r) => <div key={r.id} style={{ borderTop: '1px solid #e4dfd8', paddingTop: 14 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6 }}>
+            <div style={{ display: 'flex' }}>{[1, 2, 3, 4, 5].map((n) => <Star key={n} size={14} fill={n <= r.rating ? 'currentColor' : 'none'} />)}</div>
+            <strong style={{ fontSize: 13 }}>{r.reviewerName}</strong>
+            <span style={{ fontSize: 12, color: '#999' }}>{new Date(r.created_at).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' })}</span>
+          </div>
+          <p style={{ fontSize: 14, margin: 0 }}>{r.comment}</p>
+        </div>)}
+      </div>
+    )}
   </div>;
 }
 
