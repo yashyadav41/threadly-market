@@ -77,7 +77,7 @@ export async function insertProduct(sellerId: string, input: ProductFormInput): 
     stock: input.stock,
     sku,
     image_urls: [input.image],
-    status: 'approved',
+    status: 'pending',
   });
   if (error) throw new Error(error.message);
 }

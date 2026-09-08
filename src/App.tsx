@@ -18,6 +18,8 @@ import { fetchCartRows, replaceCartRows } from './lib/cart';
 import { fetchWishlistIds, replaceWishlistIds } from './lib/wishlist';
 import { placeOrderInDb, fetchOrdersForUser } from './lib/orders';
 import { fetchSellerByUserId, updateSellerDescription, insertProduct, updateProduct, type SellerRecord } from './lib/sellers';
+import { fetchMyApplication, submitApplication, fetchAllApplications, approveApplication, rejectApplication, type SellerApplication, type ApplicationInput } from './lib/sellerApplications';
+import { fetchAllSellers, setSellerStatus, fetchPendingProducts, setProductStatus, type AdminSellerRow, type PendingProduct } from './lib/admin';
 
 
 
@@ -116,12 +118,35 @@ function App() {
   }, [profile?.id]);
 
   const [sellerRecord, setSellerRecord] = useState<SellerRecord | null>(null);
+  const [refreshSellerFlag, setRefreshSellerFlag] = useState(0);
   useEffect(() => {
     if (!profile) { setSellerRecord(null); return; }
     let active = true;
     fetchSellerByUserId(profile.id).then((s) => { if (active) setSellerRecord(s); });
     return () => { active = false; };
-  }, [profile?.id]);
+  }, [profile?.id, refreshSellerFlag]);
+
+  const [myApplication, setMyApplication] = useState<SellerApplication | null>(null);
+  useEffect(() => {
+    if (!profile) { setMyApplication(null); return; }
+    let active = true;
+    fetchMyApplication(profile.id).then((a) => { if (active) setMyApplication(a); });
+    return () => { active = false; };
+  }, [profile?.id, refreshSellerFlag]);
+
+  const isAdmin = profile?.role === 'admin';
+  const [allApplications, setAllApplications] = useState<SellerApplication[]>([]);
+  const [allSellersAdmin, setAllSellersAdmin] = useState<AdminSellerRow[]>([]);
+  const [pendingProducts, setPendingProducts] = useState<PendingProduct[]>([]);
+  const refreshAdminData = () => {
+    fetchAllApplications().then(setAllApplications);
+    fetchAllSellers().then(setAllSellersAdmin);
+    fetchPendingProducts().then(setPendingProducts);
+  };
+  useEffect(() => {
+    if (!isAdmin) return;
+    refreshAdminData();
+  }, [isAdmin]);
 
   const [productForm, setProductForm] = useState<{ mode: 'add' | 'edit'; product?: Product } | null>(null);
 
@@ -214,6 +239,17 @@ function App() {
   const startCheckout = () => {
     if (!profile) { setAuthModalOpen(true); showToast('Please log in to place an order'); return; }
     setCheckout(true);
+  };
+
+  const goSeller = () => {
+    if (!profile) { setAuthModalOpen(true); showToast('Please log in to continue'); return; }
+    navTo('seller');
+  };
+
+  const goAdmin = () => {
+    if (!profile) { setAuthModalOpen(true); showToast('Please log in to continue'); return; }
+    if (!isAdmin) { showToast('This account does not have admin access'); return; }
+    navTo('admin');
   };
 
   const toggleWish = (id: string) => {
@@ -338,11 +374,19 @@ function App() {
     {view === 'wishlist' && <Wishlist items={products.filter((p) => wishlist.includes(p.id))} onProduct={setSelected} toggleWish={toggleWish} onMoveToCart={addToCart} />}
     {view === 'orders' && <Orders orders={orders} onView={(id) => { setOrderDetailId(id); navTo('orderDetail'); }} />}
     {view === 'orderDetail' && orderDetail && <OrderDetail order={orderDetail} onBack={() => navTo('orders')} />}
-    {view === 'account' && <Account role={role} setRole={setRole} onSeller={() => { setView('seller'); }} onAdmin={() => { setView('admin'); }} orders={orders} onViewOrder={(id) => { setOrderDetailId(id); navTo('orderDetail'); }} profile={profile} onLoginClick={() => setAuthModalOpen(true)} onLogout={async () => { await signOut(); refreshAuth(); }} />}
-    {view === 'seller' && <SellerDashboard tab={sellerTab} setTab={setSellerTab} onBack={() => navTo('home')} orders={orders} products={sellerRecord ? products.filter((p) => p.seller === sellerRecord.business_name) : []} allProducts={products} seller={sellerRecord} onProduct={setSelected} onViewOrder={(id) => { setOrderDetailId(id); navTo('orderDetail'); }} onAddProduct={() => setProductForm({ mode: 'add' })} onEditProduct={(p) => setProductForm({ mode: 'edit', product: p })} onSaveProfile={async (desc) => { if (!sellerRecord) return; try { await updateSellerDescription(sellerRecord.id, desc); setSellerRecord({ ...sellerRecord, description: desc }); showToast('Store profile updated'); } catch { showToast('Failed to update profile'); } }} />}
-    {view === 'admin' && <AdminDashboard tab={adminTab} setTab={setAdminTab} onBack={() => navTo('home')} orders={orders} products={products} onViewOrder={(id) => { setOrderDetailId(id); navTo('orderDetail'); }} />}
+    {view === 'account' && <Account role={role} setRole={setRole} onSeller={goSeller} onAdmin={goAdmin} orders={orders} onViewOrder={(id) => { setOrderDetailId(id); navTo('orderDetail'); }} profile={profile} onLoginClick={() => setAuthModalOpen(true)} onLogout={async () => { await signOut(); refreshAuth(); }} />}
+    {view === 'seller' && <SellerDashboard tab={sellerTab} setTab={setSellerTab} onBack={() => navTo('home')} orders={orders} products={sellerRecord ? products.filter((p) => p.seller === sellerRecord.business_name) : []} allProducts={products} seller={sellerRecord} onProduct={setSelected} onViewOrder={(id) => { setOrderDetailId(id); navTo('orderDetail'); }} onAddProduct={() => setProductForm({ mode: 'add' })} onEditProduct={(p) => setProductForm({ mode: 'edit', product: p })} onSaveProfile={async (desc) => { if (!sellerRecord) return; try { await updateSellerDescription(sellerRecord.id, desc); setSellerRecord({ ...sellerRecord, description: desc }); showToast('Store profile updated'); } catch { showToast('Failed to update profile'); } }} application={myApplication} onSubmitApplication={async (input) => { if (!profile) return; await submitApplication(profile.id, input); setRefreshSellerFlag((f) => f + 1); }} />}
+    {view === 'admin' && <AdminDashboard tab={adminTab} setTab={setAdminTab} onBack={() => navTo('home')} orders={orders} products={products} onViewOrder={(id) => { setOrderDetailId(id); navTo('orderDetail'); }}
+      applications={allApplications} sellersAdmin={allSellersAdmin} pendingProducts={pendingProducts}
+      onApproveApplication={async (app) => { try { await approveApplication(app); refreshAdminData(); showToast('Seller approved'); } catch { showToast('Failed to approve'); } }}
+      onRejectApplication={async (id) => { try { await rejectApplication(id); refreshAdminData(); showToast('Application rejected'); } catch { showToast('Failed to reject'); } }}
+      onSuspendSeller={async (id) => { try { await setSellerStatus(id, 'suspended'); refreshAdminData(); showToast('Seller suspended'); } catch { showToast('Failed to suspend'); } }}
+      onReactivateSeller={async (id) => { try { await setSellerStatus(id, 'approved'); refreshAdminData(); showToast('Seller reactivated'); } catch { showToast('Failed to reactivate'); } }}
+      onApproveProduct={async (id) => { try { await setProductStatus(id, 'approved'); refreshAdminData(); refreshProducts(); showToast('Product approved'); } catch { showToast('Failed to approve product'); } }}
+      onRejectProduct={async (id) => { try { await setProductStatus(id, 'rejected'); refreshAdminData(); showToast('Product rejected'); } catch { showToast('Failed to reject product'); } }}
+    />}
 
-    {view !== 'seller' && view !== 'admin' && <Footer onSeller={() => navTo('seller')} onCategory={navShop} />}
+    {view !== 'seller' && view !== 'admin' && <Footer onSeller={goSeller} onCategory={navShop} />}
     {selected && <ProductModal product={selected} onClose={() => setSelected(null)} onAdd={addToCart} onBuy={buyNow} isWishlisted={wishlist.includes(selected.id)} toggleWish={toggleWish} related={products.filter((p) => p.subcategory === selected.subcategory && p.gender === selected.gender && p.id !== selected.id).slice(0, 4)} onProduct={setSelected} />}
     {cartOpen && <CartDrawer cart={cart} setCart={setCart} subtotal={subtotal} onClose={() => setCartOpen(false)} onCheckout={() => { setCartOpen(false); startCheckout(); }} />}
     {checkout && <Checkout subtotal={checkoutSubtotal} cart={checkoutItems} onClose={() => { setCheckout(false); setBuyNowItem(null); }} onComplete={placeOrder} />}
@@ -972,16 +1016,76 @@ function ProductFormModal({ mode, product, sellerId, allProducts, onClose, onSav
   </div>;
 }
 
-function SellerDashboard({ tab, setTab, onBack, orders, products, allProducts, seller, onProduct, onViewOrder, onAddProduct, onEditProduct, onSaveProfile }: {
-  tab: string; setTab: (t: string) => void; onBack: () => void; orders: Order[]; products: Product[]; allProducts: Product[]; seller: SellerRecord | null; onProduct: (p: Product) => void; onViewOrder: (id: string) => void; onAddProduct: () => void; onEditProduct: (p: Product) => void; onSaveProfile: (description: string) => void;
-}) {
-  if (!seller) {
+// === SELLER APPLICATION FORM ===
+function SellerApplicationForm({ rejected, onBack, onSubmit }: { rejected: boolean; onBack: () => void; onSubmit: (input: ApplicationInput) => Promise<void> }) {
+  const [businessName, setBusinessName] = useState('');
+  const [ownerName, setOwnerName] = useState('');
+  const [email, setEmail] = useState('');
+  const [phone, setPhone] = useState('');
+  const [category, setCategory] = useState('');
+  const [address, setAddress] = useState('');
+  const [description, setDescription] = useState('');
+  const [error, setError] = useState('');
+  const [submitting, setSubmitting] = useState(false);
+  const [done, setDone] = useState(false);
+
+  async function handleSubmit(e: React.FormEvent) {
+    e.preventDefault();
+    setError('');
+    if (!businessName || !ownerName || !email || !phone || !category || !address) {
+      setError('Please fill in all required fields.');
+      return;
+    }
+    setSubmitting(true);
+    try {
+      await onSubmit({ business_name: businessName, owner_name: ownerName, email, phone, category, address, description });
+      setDone(true);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Something went wrong.');
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  if (done) {
     return <main className="dashboard-main" style={{ padding: 60, textAlign: 'center' }}>
-      <p className="eyebrow">No seller account</p>
-      <h1>This account isn't registered as a seller</h1>
-      <p>Log in with a seller account to manage a store.</p>
+      <p className="eyebrow">Application submitted</p>
+      <h1>Thanks — we'll review your store shortly</h1>
       <button className="button button-dark" onClick={onBack} style={{ marginTop: 16 }}>Back to storefront</button>
     </main>;
+  }
+
+  return <main className="dashboard-main" style={{ maxWidth: 560, margin: '0 auto', padding: '60px 20px' }}>
+    <p className="eyebrow">{rejected ? 'Application update' : 'Become a seller'}</p>
+    <h1>{rejected ? 'Your last application was declined — you can reapply' : 'Apply to sell on Threadly'}</h1>
+    <form onSubmit={handleSubmit} className="auth-form" style={{ marginTop: 24 }}>
+      <div className="profile-field"><label>Business name *</label><input value={businessName} onChange={(e) => setBusinessName(e.target.value)} /></div>
+      <div className="profile-field"><label>Owner name *</label><input value={ownerName} onChange={(e) => setOwnerName(e.target.value)} /></div>
+      <div className="profile-field"><label>Contact email *</label><input type="email" value={email} onChange={(e) => setEmail(e.target.value)} /></div>
+      <div className="profile-field"><label>Phone *</label><input value={phone} onChange={(e) => setPhone(e.target.value)} /></div>
+      <div className="profile-field"><label>Category *</label><input value={category} onChange={(e) => setCategory(e.target.value)} placeholder="e.g. Menswear, Streetwear" /></div>
+      <div className="profile-field"><label>Business address *</label><input value={address} onChange={(e) => setAddress(e.target.value)} /></div>
+      <div className="profile-field"><label>Tell us about your brand</label><textarea value={description} onChange={(e) => setDescription(e.target.value)} /></div>
+      {error && <p className="auth-error">{error}</p>}
+      <button className="button button-dark" type="submit" disabled={submitting}>{submitting ? 'Submitting…' : 'Submit application'}</button>
+      <button className="text-button" type="button" onClick={onBack}>Cancel</button>
+    </form>
+  </main>;
+}
+
+function SellerDashboard({ tab, setTab, onBack, orders, products, allProducts, seller, onProduct, onViewOrder, onAddProduct, onEditProduct, onSaveProfile, application, onSubmitApplication }: {
+  tab: string; setTab: (t: string) => void; onBack: () => void; orders: Order[]; products: Product[]; allProducts: Product[]; seller: SellerRecord | null; onProduct: (p: Product) => void; onViewOrder: (id: string) => void; onAddProduct: () => void; onEditProduct: (p: Product) => void; onSaveProfile: (description: string) => void; application: SellerApplication | null; onSubmitApplication: (input: ApplicationInput) => Promise<void>;
+}) {
+  if (!seller) {
+    if (application?.status === 'pending') {
+      return <main className="dashboard-main" style={{ padding: 60, textAlign: 'center' }}>
+        <p className="eyebrow">Application submitted</p>
+        <h1>Your seller application is under review</h1>
+        <p>We'll approve your store as soon as our team reviews it. This usually happens quickly for a demo marketplace.</p>
+        <button className="button button-dark" onClick={onBack} style={{ marginTop: 16 }}>Back to storefront</button>
+      </main>;
+    }
+    return <SellerApplicationForm rejected={application?.status === 'rejected'} onBack={onBack} onSubmit={onSubmitApplication} />;
   }
   const sellerName = seller.business_name;
   const sellerOrders = orders.filter((o) => o.items.some((i) => i.seller === sellerName));
@@ -1060,13 +1164,17 @@ function SellerDashboard({ tab, setTab, onBack, orders, products, allProducts, s
 }
 
 // === ADMIN DASHBOARD ===
-function AdminDashboard({ tab, setTab, onBack, orders, products, onViewOrder }: {
+function AdminDashboard({ tab, setTab, onBack, orders, products, onViewOrder, applications, sellersAdmin, pendingProducts, onApproveApplication, onRejectApplication, onSuspendSeller, onReactivateSeller, onApproveProduct, onRejectProduct }: {
   tab: string; setTab: (t: string) => void; onBack: () => void; orders: Order[]; products: Product[]; onViewOrder: (id: string) => void;
+  applications: SellerApplication[]; sellersAdmin: AdminSellerRow[]; pendingProducts: PendingProduct[];
+  onApproveApplication: (app: SellerApplication) => void; onRejectApplication: (id: string) => void;
+  onSuspendSeller: (id: string) => void; onReactivateSeller: (id: string) => void;
+  onApproveProduct: (id: string) => void; onRejectProduct: (id: string) => void;
 }) {
   const totalRevenue = orders.reduce((s, o) => s + o.total, 0);
   const totalCommission = orders.reduce((s, o) => s + o.items.reduce((si, i) => si + i.price * i.quantity * COMMISSION_RATE, 0), 0);
-  const allSellers = [...new Set(products.map((p) => p.seller))];
   const allCustomers = [...new Set(orders.map((o) => o.customer))];
+  const pendingApplications = applications.filter((a) => a.status === 'pending');
 
   return <main className="dashboard">
     <aside className="dashboard-side">
@@ -1074,8 +1182,9 @@ function AdminDashboard({ tab, setTab, onBack, orders, products, onViewOrder }: 
       <div className="dash-profile"><div className="avatar">AD</div><div><strong>Admin</strong><span>Platform operations</span></div></div>
       <nav>
         <button className={tab === 'overview' ? 'active' : ''} onClick={() => setTab('overview')}><LayoutDashboard size={17} />Overview</button>
-        <button className={tab === 'sellers' ? 'active' : ''} onClick={() => setTab('sellers')}><Store size={17} />Sellers <span>{allSellers.length}</span></button>
-        <button className={tab === 'products' ? 'active' : ''} onClick={() => setTab('products')}><Package size={17} />Products <span>{products.length}</span></button>
+        <button className={tab === 'applications' ? 'active' : ''} onClick={() => setTab('applications')}><Store size={17} />Applications {pendingApplications.length > 0 && <span>{pendingApplications.length}</span>}</button>
+        <button className={tab === 'sellers' ? 'active' : ''} onClick={() => setTab('sellers')}><Store size={17} />Sellers <span>{sellersAdmin.length}</span></button>
+        <button className={tab === 'products' ? 'active' : ''} onClick={() => setTab('products')}><Package size={17} />Products {pendingProducts.length > 0 && <span>{pendingProducts.length}</span>}</button>
         <button className={tab === 'orders' ? 'active' : ''} onClick={() => setTab('orders')}><ShoppingBag size={17} />Orders <span>{orders.length}</span></button>
         <button className={tab === 'customers' ? 'active' : ''} onClick={() => setTab('customers')}><Users size={17} />Customers <span>{allCustomers.length}</span></button>
       </nav>
@@ -1086,8 +1195,8 @@ function AdminDashboard({ tab, setTab, onBack, orders, products, onViewOrder }: 
         <div className="stat-grid">
           <Stat label="Total Revenue" value={money(totalRevenue)} sub={`${orders.length} orders`} icon={<TrendingUp />} />
           <Stat label="Commission Earned" value={money(totalCommission)} sub="10% marketplace fee" icon={<Tag />} />
-          <Stat label="Total Products" value={String(products.length)} sub={`${allSellers.length} sellers`} icon={<Package />} />
-          <Stat label="Total Customers" value={String(allCustomers.length)} sub={`${allSellers.length} sellers`} icon={<Users />} />
+          <Stat label="Total Products" value={String(products.length)} sub={`${sellersAdmin.length} sellers`} icon={<Package />} />
+          <Stat label="Total Customers" value={String(allCustomers.length)} sub={`${pendingApplications.length} pending applications`} icon={<Users />} onClick={() => setTab('applications')} />
         </div>
         <div className="dash-panels">
           <div className="chart-panel"><div className="panel-heading"><div><p className="eyebrow">Performance</p><h2>Revenue overview</h2></div></div><SalesChart /></div>
@@ -1098,11 +1207,28 @@ function AdminDashboard({ tab, setTab, onBack, orders, products, onViewOrder }: 
         </div>
       </>)}
 
-      {tab === 'sellers' && (<><div className="dashboard-top"><div><h1>Sellers</h1><p>{allSellers.length} sellers on the platform</p></div></div>
-        <div className="seller-list">{allSellers.map((s, i) => { const sProducts = products.filter((p) => p.seller === s); const sOrders = orders.filter((o) => o.items.some((i) => i.seller === s)); return <div key={i} className="seller-card"><div className="avatar">{s.slice(0, 2).toUpperCase()}</div><div><strong>{s}</strong><small>{sProducts.length} products · {sOrders.length} orders</small></div><span className="status approved"><CheckCircle size={14} /> Approved</span></div>; })}</div>
+      {tab === 'applications' && (<><div className="dashboard-top"><div><h1>Seller Applications</h1><p>{applications.length} total · {pendingApplications.length} pending review</p></div></div>
+        {applications.length ? <div className="seller-list">{applications.map((a) => <div key={a.id} className="seller-card"><div className="avatar">{a.business_name.slice(0, 2).toUpperCase()}</div><div><strong>{a.business_name}</strong><small>{a.owner_name} · {a.email} · {a.category}</small></div>
+          {a.status === 'pending' ? <div style={{ display: 'flex', gap: 8 }}><button className="button button-dark" style={{ padding: '8px 16px' }} onClick={() => onApproveApplication(a)}>Approve</button><button className="text-button" onClick={() => onRejectApplication(a.id)}>Reject</button></div>
+            : <span className={`status ${a.status}`}>{a.status === 'approved' ? <CheckCircle size={14} /> : <XCircle size={14} />} {a.status.charAt(0).toUpperCase() + a.status.slice(1)}</span>}
+        </div>)}</div>
+          : <div className="empty-state"><Store size={28} /><h2>No applications yet</h2><p>Seller applications will appear here.</p></div>}
       </>)}
 
-      {tab === 'products' && (<><div className="dashboard-top"><div><h1>All Products</h1><p>{products.length} products across the marketplace</p></div></div>
+      {tab === 'sellers' && (<><div className="dashboard-top"><div><h1>Sellers</h1><p>{sellersAdmin.length} sellers on the platform</p></div></div>
+        <div className="seller-list">{sellersAdmin.map((s) => { const sProducts = products.filter((p) => p.seller === s.business_name); const sOrders = orders.filter((o) => o.items.some((i) => i.seller === s.business_name)); return <div key={s.id} className="seller-card"><div className="avatar">{s.business_name.slice(0, 2).toUpperCase()}</div><div><strong>{s.business_name}</strong><small>{sProducts.length} products · {sOrders.length} orders</small></div>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+            <span className={`status ${s.status}`}>{s.status === 'approved' ? <CheckCircle size={14} /> : <XCircle size={14} />} {s.status.charAt(0).toUpperCase() + s.status.slice(1)}</span>
+            {s.status === 'approved' ? <button className="text-button" onClick={() => onSuspendSeller(s.id)}>Suspend</button> : <button className="text-button" onClick={() => onReactivateSeller(s.id)}>Reactivate</button>}
+          </div>
+        </div>; })}</div>
+      </>)}
+
+      {tab === 'products' && (<><div className="dashboard-top"><div><h1>All Products</h1><p>{products.length} live products · {pendingProducts.length} pending review</p></div></div>
+        {pendingProducts.length > 0 && <div className="low-stock-alert" style={{ marginBottom: 24 }}>
+          <h3>Pending moderation</h3>
+          <div className="low-stock-list">{pendingProducts.map((p) => <div key={p.id} className="low-stock-item"><img src={p.image_urls?.[0]} alt={p.name} /><div><strong>{p.name}</strong><small>{p.sellers?.business_name} · {money(p.price)}</small></div><div style={{ display: 'flex', gap: 6, marginLeft: 'auto' }}><button className="icon-btn-sm" onClick={() => onApproveProduct(p.id)}><CheckCircle size={15} /></button><button className="icon-btn-sm" onClick={() => onRejectProduct(p.id)}><XCircle size={15} /></button></div></div>)}</div>
+        </div>}
         <div className="admin-product-grid">{products.slice(0, 24).map((p) => <div key={p.id} className="admin-product-card"><img src={p.image} alt={p.name} /><div><p className="product-brand">{p.brand}</p><strong>{p.name}</strong><small>{p.gender} · {p.subcategory}</small><div className="product-bottom"><span className="price">{money(p.price)}</span><span className={`stock-badge ${p.stock < 15 ? 'low' : ''}`}>{p.stock} in stock</span></div></div></div>)}</div>
       </>)}
 
