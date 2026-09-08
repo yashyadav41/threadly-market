@@ -11,7 +11,7 @@ export interface ReviewRow {
 export async function fetchReviewsForProduct(productId: string): Promise<ReviewRow[]> {
   const { data, error } = await supabase
     .from('reviews')
-    .select('id, rating, comment, created_at, profiles ( display_name )')
+    .select('id, user_id, rating, comment, created_at')
     .eq('product_id', productId)
     .eq('status', 'published')
     .order('created_at', { ascending: false });
@@ -20,12 +20,21 @@ export async function fetchReviewsForProduct(productId: string): Promise<ReviewR
     console.error('fetchReviewsForProduct failed:', error.message);
     return [];
   }
-  return (data ?? []).map((r: any) => ({
+  if (!data || data.length === 0) return [];
+
+  const userIds = [...new Set(data.map((r) => r.user_id))];
+  const { data: names } = await supabase
+    .from('profile_public_names')
+    .select('id, display_name')
+    .in('id', userIds);
+  const nameById = new Map((names ?? []).map((n) => [n.id, n.display_name]));
+
+  return data.map((r) => ({
     id: r.id,
     rating: r.rating,
     comment: r.comment,
     created_at: r.created_at,
-    reviewerName: r.profiles?.display_name || 'Threadly customer',
+    reviewerName: nameById.get(r.user_id) || 'Threadly customer',
   }));
 }
 
