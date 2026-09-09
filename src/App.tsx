@@ -1240,6 +1240,37 @@ function SellerDashboard({ tab, setTab, onBack, orders, products, allProducts, s
 }
 
 // === ADMIN DASHBOARD ===
+// === PENDING PRODUCT DETAIL MODAL (admin moderation) ===
+function PendingProductDetailModal({ product, onClose, onApprove, onReject }: {
+  product: PendingProduct; onClose: () => void; onApprove: (id: string) => void; onReject: (id: string) => void;
+}) {
+  const createdDate = new Date(product.created_at).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' });
+  return <div className="modal-backdrop" onClick={onClose}>
+    <div className="auth-modal-box" style={{ width: 'min(560px, 100%)', maxHeight: '85vh', overflowY: 'auto' }} onClick={(e) => e.stopPropagation()}>
+      <button className="close-btn" onClick={onClose} aria-label="Close"><X size={18} /></button>
+      <p className="eyebrow">Pending review</p>
+      <h2>{product.name}</h2>
+      {product.image_urls?.[0] && <img src={product.image_urls[0]} alt={product.name} style={{ width: '100%', borderRadius: 8, marginBottom: 16 }} />}
+      <div className="profile-form" style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+        <div className="profile-field"><label>Seller / Store</label><span>{product.sellers?.business_name ?? 'Unknown'}</span></div>
+        <div className="profile-field"><label>Brand</label><span>{product.brands?.name ?? 'Unknown'}</span></div>
+        <div className="profile-field"><label>Category</label><span>{product.categories?.name ?? 'Unknown'} · {product.gender}</span></div>
+        <div className="profile-field"><label>Price</label><span>{money(product.price)} {product.original_price > product.price && <small style={{ textDecoration: 'line-through', opacity: 0.6 }}>{money(product.original_price)}</small>}</span></div>
+        <div className="profile-field"><label>Total stock</label><span>{product.stock} units</span></div>
+        <div className="profile-field"><label>Sizes available</label><span>{product.sizes.length ? product.sizes.join(', ') : '—'} <small style={{ opacity: 0.6 }}>(per-size stock isn't tracked separately — only total stock above)</small></span></div>
+        <div className="profile-field"><label>Colors</label><span>{product.colors.length ? product.colors.join(', ') : '—'}</span></div>
+        <div className="profile-field"><label>Material</label><span>{product.material || '—'}</span></div>
+        <div className="profile-field"><label>Description</label><span>{product.description || '—'}</span></div>
+        <div className="profile-field"><label>Submitted</label><span>{createdDate}</span></div>
+      </div>
+      <div style={{ display: 'flex', gap: 10, marginTop: 20 }}>
+        <button className="button button-dark" style={{ flex: 1 }} onClick={() => { onApprove(product.id); onClose(); }}>Approve</button>
+        <button className="text-button" style={{ flex: 1 }} onClick={() => { onReject(product.id); onClose(); }}>Reject</button>
+      </div>
+    </div>
+  </div>;
+}
+
 function AdminDashboard({ tab, setTab, onBack, orders, products, onViewOrder, applications, sellersAdmin, pendingProducts, onApproveApplication, onRejectApplication, onSuspendSeller, onReactivateSeller, onApproveProduct, onRejectProduct }: {
   tab: string; setTab: (t: string) => void; onBack: () => void; orders: Order[]; products: Product[]; onViewOrder: (id: string) => void;
   applications: SellerApplication[]; sellersAdmin: AdminSellerRow[]; pendingProducts: PendingProduct[];
@@ -1248,6 +1279,7 @@ function AdminDashboard({ tab, setTab, onBack, orders, products, onViewOrder, ap
   onApproveProduct: (id: string) => void; onRejectProduct: (id: string) => void;
 }) {
   const totalRevenue = orders.reduce((s, o) => s + o.total, 0);
+  const [viewingProduct, setViewingProduct] = useState<PendingProduct | null>(null);
   const totalCommission = orders.reduce((s, o) => s + o.items.reduce((si, i) => si + i.price * i.quantity * COMMISSION_RATE, 0), 0);
   const allCustomers = [...new Set(orders.map((o) => o.customer))];
   const pendingApplications = applications.filter((a) => a.status === 'pending');
@@ -1303,7 +1335,7 @@ function AdminDashboard({ tab, setTab, onBack, orders, products, onViewOrder, ap
       {tab === 'products' && (<><div className="dashboard-top"><div><h1>All Products</h1><p>{products.length} live products · {pendingProducts.length} pending review</p></div></div>
         {pendingProducts.length > 0 && <div className="low-stock-alert" style={{ marginBottom: 24 }}>
           <h3>Pending moderation</h3>
-          <div className="low-stock-list">{pendingProducts.map((p) => <div key={p.id} className="low-stock-item"><img src={p.image_urls?.[0]} alt={p.name} /><div><strong>{p.name}</strong><small>{p.sellers?.business_name} · {money(p.price)}</small></div><div style={{ display: 'flex', gap: 6, marginLeft: 'auto' }}><button className="icon-btn-sm" onClick={() => onApproveProduct(p.id)}><CheckCircle size={15} /></button><button className="icon-btn-sm" onClick={() => onRejectProduct(p.id)}><XCircle size={15} /></button></div></div>)}</div>
+          <div className="low-stock-list">{pendingProducts.map((p) => <div key={p.id} className="low-stock-item"><img src={p.image_urls?.[0]} alt={p.name} /><div><strong>{p.name}</strong><small>{p.sellers?.business_name} · {money(p.price)}</small></div><div style={{ display: 'flex', gap: 6, marginLeft: 'auto' }}><button className="text-button" onClick={() => setViewingProduct(p)}>View Details</button><button className="icon-btn-sm" onClick={() => onApproveProduct(p.id)}><CheckCircle size={15} /></button><button className="icon-btn-sm" onClick={() => onRejectProduct(p.id)}><XCircle size={15} /></button></div></div>)}</div>
         </div>}
         <div className="admin-product-grid">{products.slice(0, 24).map((p) => <div key={p.id} className="admin-product-card"><img src={p.image} alt={p.name} /><div><p className="product-brand">{p.brand}</p><strong>{p.name}</strong><small>{p.gender} · {p.subcategory}</small><div className="product-bottom"><span className="price">{money(p.price)}</span><span className={`stock-badge ${p.stock < 15 ? 'low' : ''}`}>{p.stock} in stock</span></div></div></div>)}</div>
       </>)}
@@ -1318,6 +1350,7 @@ function AdminDashboard({ tab, setTab, onBack, orders, products, onViewOrder, ap
           : <div className="empty-state"><Users size={28} /><h2>No customers yet</h2><p>Registered customers will appear here.</p></div>}
       </>)}
     </section>
+    {viewingProduct && <PendingProductDetailModal product={viewingProduct} onClose={() => setViewingProduct(null)} onApprove={onApproveProduct} onReject={onRejectProduct} />}
   </main>;
 }
 

@@ -30,9 +30,19 @@ export async function setSellerStatus(sellerId: string, status: 'approved' | 'su
 export interface PendingProduct {
   id: string;
   name: string;
+  description: string;
+  gender: string;
   price: number;
+  original_price: number;
+  sizes: string[];
+  colors: string[];
+  material: string;
+  stock: number;
   image_urls: string[];
   status: string;
+  created_at: string;
+  brands: { name: string } | null;
+  categories: { name: string } | null;
   sellers: { business_name: string } | null;
 }
 
@@ -40,7 +50,7 @@ export interface PendingProduct {
 export async function fetchPendingProducts(): Promise<PendingProduct[]> {
   const { data, error } = await supabase
     .from('products')
-    .select('id, name, price, image_urls, status, sellers ( business_name )')
+    .select('id, name, description, gender, price, original_price, sizes, colors, material, stock, image_urls, status, created_at, brands ( name ), categories ( name ), sellers ( business_name )')
     .eq('status', 'pending')
     .order('created_at', { ascending: false });
 
