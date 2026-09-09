@@ -406,7 +406,7 @@ function App() {
   
 
 // === BREADCRUMBS ===
-function Breadcrumbs({ items, onNav }: { items: { label: string; onClick?: () => void }[] }) {
+function Breadcrumbs({ items }: { items: { label: string; onClick?: () => void }[] }) {
   return <div className="breadcrumbs">
     {items.map((item, i) => <span key={i} style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
       {i > 0 && <span className="crumb-sep">/</span>}
@@ -703,7 +703,7 @@ function ProductModal({ product, onClose, onAdd, onBuy, isWishlisted, toggleWish
           <div><strong>Seller</strong><span>{product.seller}</span></div>
           <div><strong>Shipping</strong><span>Free over ₹1,499</span></div>
           <div><strong>Returns</strong><span>14-day easy returns</span></div>
-          <div><strong>SKU</strong><span>TM-{product.id.toString().padStart(4, '0')}</span></div>
+          <div><strong>SKU</strong><span>TM-{product.id.slice(0, 8).toUpperCase()}</span></div>
         </div>
       </div>
 
