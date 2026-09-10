@@ -225,14 +225,14 @@ function App() {
   const addToCart = (product: Product, size: string, color: string, qty: number = 1) => {
     setCart((items) => {
       const existing = items.find((item) => item.id === product.id && item.size === size && item.color === color);
-      if (existing) return items.map((item) => item === existing ? { ...item, quantity: Math.min(item.quantity + qty, product.stock) } : item);
+      if (existing) return items.map((item) => item === existing ? { ...item, quantity: Math.min(item.quantity + qty, product.sizeStocks?.[size] ?? product.stock) } : item);
       return [...items, { ...product, size, color, quantity: qty }];
     });
     showToast('Added to your bag');
   };
 
-  const buyNow = (product: Product, size: string, color: string) => {
-    setBuyNowItem({ ...product, size, color, quantity: 1 });
+  const buyNow = (product: Product, size: string, color: string, qty: number) => {
+    setBuyNowItem({ ...product, size, color, quantity: qty });
     setSelected(null);
     startCheckout();
   };
@@ -666,7 +666,7 @@ function Wishlist({ items, onProduct, toggleWish, onMoveToCart }: { items: Produ
 
 // === PRODUCT DETAIL MODAL ===
 function ProductModal({ product, onClose, onAdd, onBuy, isWishlisted, toggleWish, related, onProduct, profile }: {
-  product: Product; onClose: () => void; onAdd: (p: Product, s: string, c: string, q?: number) => void; onBuy: (p: Product, s: string, c: string) => void;
+  product: Product; onClose: () => void; onAdd: (p: Product, s: string, c: string, q?: number) => void; onBuy: (p: Product, s: string, c: string, q: number) => void;
   isWishlisted: boolean; toggleWish: (n: string) => void; related: Product[]; onProduct: (p: Product) => void; profile: import('./lib/auth').AuthProfile | null;
 }) {
   const [size, setSize] = useState(product.sizes[0]);
@@ -697,7 +697,7 @@ function ProductModal({ product, onClose, onAdd, onBuy, isWishlisted, toggleWish
 
         <div className="modal-actions">
           <button className="button button-dark full" onClick={() => onAdd(product, size, color, qty)} disabled={selectedSizeStock <= 0}><ShoppingBag size={16} /> {selectedSizeStock <= 0 ? 'Out of Stock' : 'Add to Cart'}</button>
-          <button className="button button-outline full" onClick={() => onBuy(product, size, color)} disabled={selectedSizeStock <= 0}><Zap size={16} /> Buy Now</button>
+          <button className="button button-outline full" onClick={() => onBuy(product, size, color, qty)} disabled={selectedSizeStock <= 0}><Zap size={16} /> Buy Now</button>
           <button className={`save-btn ${isWishlisted ? 'saved' : ''}`} onClick={() => toggleWish(product.id)}><Heart size={18} fill={isWishlisted ? 'currentColor' : 'none'} /></button>
         </div>
 
@@ -813,7 +813,7 @@ function CartDrawer({ cart, setCart, subtotal, onClose, onCheckout }: { cart: Ca
             <div className="quantity">
               <button onClick={() => setCart((c) => c.map((x) => x === item ? { ...x, quantity: Math.max(1, x.quantity - 1) } : x))}><Minus size={15} /></button>
               <span>{item.quantity}</span>
-              <button onClick={() => setCart((c) => c.map((x) => x === item ? { ...x, quantity: Math.min(item.stock, x.quantity + 1) } : x))}><Plus size={15} /></button>
+              <button onClick={() => setCart((c) => c.map((x) => x === item ? { ...x, quantity: Math.min(item.sizeStocks?.[item.size] ?? item.stock, x.quantity + 1) } : x))}><Plus size={15} /></button>
               <button className="remove" onClick={() => setCart((c) => c.filter((x) => x !== item))}><Trash2 size={14} /></button>
             </div>
             <small className="item-subtotal">Subtotal: {money(item.price * item.quantity)}</small>
