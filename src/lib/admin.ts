@@ -44,13 +44,14 @@ export interface PendingProduct {
   brands: { name: string } | null;
   categories: { name: string } | null;
   sellers: { business_name: string } | null;
+  product_size_inventory: { size: string; stock: number }[];
 }
 
 /** Products awaiting moderation. */
 export async function fetchPendingProducts(): Promise<PendingProduct[]> {
   const { data, error } = await supabase
     .from('products')
-    .select('id, name, description, gender, price, original_price, sizes, colors, material, stock, image_urls, status, created_at, brands ( name ), categories ( name ), sellers ( business_name )')
+    .select('id, name, description, gender, price, original_price, sizes, colors, material, stock, image_urls, status, created_at, brands ( name ), categories ( name ), sellers ( business_name ), product_size_inventory ( size, stock )')
     .eq('status', 'pending')
     .order('created_at', { ascending: false });
 

@@ -49,6 +49,21 @@ export async function fetchProducts(): Promise<Product[]> {
   }
 
   const rows = (data ?? []) as unknown as ProductRow[];
+  if (rows.length === 0) return [];
+
+  const productIds = rows.map((r) => r.id);
+  const { data: inventoryRows, error: invError } = await supabase
+    .from('product_size_inventory')
+    .select('product_id, size, stock')
+    .in('product_id', productIds);
+  if (invError) console.error('fetchProducts (size inventory) failed:', invError.message);
+
+  const sizeStocksByProduct = new Map<string, Record<string, number>>();
+  for (const r of inventoryRows ?? []) {
+    const existing = sizeStocksByProduct.get(r.product_id) ?? {};
+    existing[r.size] = r.stock;
+    sizeStocksByProduct.set(r.product_id, existing);
+  }
 
   return rows.map((row): Product => {
     const categoryName = row.categories?.name ?? '';
@@ -69,6 +84,7 @@ export async function fetchProducts(): Promise<Product[]> {
       colors: row.colors ?? [],
       sizes: row.sizes ?? [],
       stock: row.stock,
+      sizeStocks: sizeStocksByProduct.get(row.id),
       isNew: row.is_new,
       onSale: Number(row.original_price) > Number(row.price),
       description: row.description,

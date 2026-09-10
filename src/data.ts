@@ -18,6 +18,9 @@ export interface Product {
   colors: string[];
   sizes: string[];
   stock: number;
+  /** Optional: real per-size stock, e.g. { S: 4, M: 10 }. Present for
+   *  live (Supabase) products; absent for the mock/fallback catalog. */
+  sizeStocks?: Record<string, number>;
   isNew?: boolean;
   onSale?: boolean;
   description: string;

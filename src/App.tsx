@@ -283,7 +283,10 @@ function App() {
       });
     } catch (err) {
       console.error('placeOrderInDb failed:', err);
-      showToast('Something went wrong placing your order. Please try again.');
+      const msg = err instanceof Error && err.message.toLowerCase().includes('insufficient stock')
+        ? err.message
+        : 'Something went wrong placing your order. Please try again.';
+      showToast(msg);
       return;
     }
 
@@ -669,6 +672,7 @@ function ProductModal({ product, onClose, onAdd, onBuy, isWishlisted, toggleWish
   const [size, setSize] = useState(product.sizes[0]);
   const [color, setColor] = useState(product.colors[0]);
   const [qty, setQty] = useState(1);
+  const selectedSizeStock = product.sizeStocks?.[size] ?? product.stock;
 
   return <div className="modal-backdrop" onClick={onClose}>
     <div className="product-modal" onClick={(e) => e.stopPropagation()}>
@@ -683,17 +687,17 @@ function ProductModal({ product, onClose, onAdd, onBuy, isWishlisted, toggleWish
         <div className="modal-price"><strong>{money(product.price)}</strong>{product.original > product.price && <><del>{money(product.original)}</del><span className="discount">{Math.round((1 - product.price / product.original) * 100)}% off</span></>}</div>
         <p className="modal-description">{product.description}</p>
 
-        <div className="option-row"><span>Color: <strong>{color}</strong></span><span className={`stock ${product.stock < 10 ? 'low' : ''}`}>{product.stock < 10 ? `Only ${product.stock} left` : 'In stock'}</span></div>
+        <div className="option-row"><span>Color: <strong>{color}</strong></span><span className={`stock ${selectedSizeStock < 10 ? 'low' : ''}`}>{selectedSizeStock <= 0 ? 'Out of stock' : selectedSizeStock < 10 ? `Only ${selectedSizeStock} left` : 'In stock'}</span></div>
         <div className="color-row">{product.colors.map((c) => <button key={c} className={`color-swatch ${color === c ? 'active' : ''}`} onClick={() => setColor(c)}>{c}</button>)}</div>
 
         <div className="option-row"><span>Size: <strong>{size}</strong></span><button className="text-button">Size guide</button></div>
-        <div className="size-row">{product.sizes.map((s) => <button key={s} className={size === s ? 'selected' : ''} onClick={() => setSize(s)}>{s}</button>)}</div>
+        <div className="size-row">{product.sizes.map((s) => <button key={s} className={size === s ? 'selected' : ''} onClick={() => { setSize(s); setQty(1); }}>{s}</button>)}</div>
 
-        <div className="qty-row"><span>Quantity</span><div className="qty-control"><button onClick={() => setQty(Math.max(1, qty - 1))}><Minus size={15} /></button><span>{qty}</span><button onClick={() => setQty(Math.min(product.stock, qty + 1))}><Plus size={15} /></button></div></div>
+        <div className="qty-row"><span>Quantity</span><div className="qty-control"><button onClick={() => setQty(Math.max(1, qty - 1))}><Minus size={15} /></button><span>{qty}</span><button onClick={() => setQty(Math.min(selectedSizeStock, qty + 1))}><Plus size={15} /></button></div></div>
 
         <div className="modal-actions">
-          <button className="button button-dark full" onClick={() => onAdd(product, size, color, qty)}><ShoppingBag size={16} /> Add to Cart</button>
-          <button className="button button-outline full" onClick={() => onBuy(product, size, color)}><Zap size={16} /> Buy Now</button>
+          <button className="button button-dark full" onClick={() => onAdd(product, size, color, qty)} disabled={selectedSizeStock <= 0}><ShoppingBag size={16} /> {selectedSizeStock <= 0 ? 'Out of Stock' : 'Add to Cart'}</button>
+          <button className="button button-outline full" onClick={() => onBuy(product, size, color)} disabled={selectedSizeStock <= 0}><Zap size={16} /> Buy Now</button>
           <button className={`save-btn ${isWishlisted ? 'saved' : ''}`} onClick={() => toggleWish(product.id)}><Heart size={18} fill={isWishlisted ? 'currentColor' : 'none'} /></button>
         </div>
 
@@ -1030,8 +1034,14 @@ function ProductFormModal({ mode, product, sellerId, allProducts, onClose, onSav
   const [subcategory, setSubcategory] = useState(product?.subcategory ?? '');
   const [price, setPrice] = useState(String(product?.price ?? ''));
   const [original, setOriginal] = useState(String(product?.original ?? ''));
-  const [stock, setStock] = useState(String(product?.stock ?? ''));
   const [sizes, setSizes] = useState(product?.sizes.join(', ') ?? '');
+  const [sizeStockInputs, setSizeStockInputs] = useState<Record<string, string>>(() => {
+    const initial: Record<string, string> = {};
+    if (product?.sizeStocks) {
+      for (const [sz, qty] of Object.entries(product.sizeStocks)) initial[sz] = String(qty);
+    }
+    return initial;
+  });
   const [colors, setColors] = useState(product?.colors.join(', ') ?? '');
   const [material, setMaterial] = useState(product?.material ?? '');
   const [description, setDescription] = useState(product?.description ?? '');
@@ -1040,18 +1050,26 @@ function ProductFormModal({ mode, product, sellerId, allProducts, onClose, onSav
   const [submitting, setSubmitting] = useState(false);
 
   const subcategoryOptions = [...new Set(allProducts.filter((p) => p.gender === gender).map((p) => p.subcategory))];
+  const sizeList = sizes.split(',').map((s) => s.trim()).filter(Boolean);
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     setError('');
-    if (!name || !subcategory || !price || !stock || !sizes || !colors || !image) {
+    if (!name || !subcategory || !price || sizeList.length === 0 || !colors || !image) {
       setError('Please fill in all required fields.');
       return;
     }
+    if (sizeList.some((sz) => !sizeStockInputs[sz] || Number(sizeStockInputs[sz]) < 0)) {
+      setError('Please enter stock for every size.');
+      return;
+    }
+    const sizeStocks: Record<string, number> = {};
+    for (const sz of sizeList) sizeStocks[sz] = Number(sizeStockInputs[sz]);
+
     const input = {
       name, brand, gender, subcategory,
-      price: Number(price), original: Number(original) || Number(price), stock: Number(stock),
-      sizes: sizes.split(',').map((s) => s.trim()).filter(Boolean),
+      price: Number(price), original: Number(original) || Number(price),
+      sizeStocks,
       colors: colors.split(',').map((c) => c.trim()).filter(Boolean),
       material, description, image,
     };
@@ -1079,8 +1097,18 @@ function ProductFormModal({ mode, product, sellerId, allProducts, onClose, onSav
         <div className="profile-field"><label>Category *</label><select value={subcategory} onChange={(e) => setSubcategory(e.target.value)}><option value="">Select…</option>{subcategoryOptions.map((s) => <option key={s} value={s}>{s}</option>)}</select></div>
         <div className="profile-field"><label>Price (₹) *</label><input type="number" value={price} onChange={(e) => setPrice(e.target.value)} /></div>
         <div className="profile-field"><label>Original price (₹, optional — for sale badge)</label><input type="number" value={original} onChange={(e) => setOriginal(e.target.value)} /></div>
-        <div className="profile-field"><label>Stock *</label><input type="number" value={stock} onChange={(e) => setStock(e.target.value)} /></div>
         <div className="profile-field"><label>Sizes * (comma separated, e.g. S, M, L, XL)</label><input value={sizes} onChange={(e) => setSizes(e.target.value)} /></div>
+        {sizeList.length > 0 && <div className="profile-field">
+          <label>Stock per size *</label>
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+            {sizeList.map((sz) => (
+              <div key={sz} style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                <span style={{ fontSize: 13, minWidth: 28 }}>{sz}</span>
+                <input type="number" style={{ width: 70 }} value={sizeStockInputs[sz] ?? ''} onChange={(e) => setSizeStockInputs((prev) => ({ ...prev, [sz]: e.target.value }))} />
+              </div>
+            ))}
+          </div>
+        </div>}
         <div className="profile-field"><label>Colors * (comma separated)</label><input value={colors} onChange={(e) => setColors(e.target.value)} /></div>
         <div className="profile-field"><label>Material</label><input value={material} onChange={(e) => setMaterial(e.target.value)} /></div>
         <div className="profile-field"><label>Image URL *</label><input value={image} onChange={(e) => setImage(e.target.value)} placeholder="https://…" /></div>
@@ -1257,7 +1285,7 @@ function PendingProductDetailModal({ product, onClose, onApprove, onReject }: {
         <div className="profile-field"><label>Category</label><span>{product.categories?.name ?? 'Unknown'} · {product.gender}</span></div>
         <div className="profile-field"><label>Price</label><span>{money(product.price)} {product.original_price > product.price && <small style={{ textDecoration: 'line-through', opacity: 0.6 }}>{money(product.original_price)}</small>}</span></div>
         <div className="profile-field"><label>Total stock</label><span>{product.stock} units</span></div>
-        <div className="profile-field"><label>Sizes available</label><span>{product.sizes.length ? product.sizes.join(', ') : '—'} <small style={{ opacity: 0.6 }}>(per-size stock isn't tracked separately — only total stock above)</small></span></div>
+        <div className="profile-field"><label>Stock by size</label><span>{product.product_size_inventory?.length ? product.product_size_inventory.map((s) => `${s.size}: ${s.stock}`).join(' · ') : (product.sizes.length ? product.sizes.join(', ') : '—')}</span></div>
         <div className="profile-field"><label>Colors</label><span>{product.colors.length ? product.colors.join(', ') : '—'}</span></div>
         <div className="profile-field"><label>Material</label><span>{product.material || '—'}</span></div>
         <div className="profile-field"><label>Description</label><span>{product.description || '—'}</span></div>

@@ -34,8 +34,9 @@ export interface ProductFormInput {
   subcategory: string;
   price: number;
   original: number;
-  stock: number;
-  sizes: string[];
+  /** Stock per size, e.g. { S: 4, M: 10, L: 6 }. Replaces the old flat "stock" field —
+   *  the total shown everywhere else is now auto-computed from this. */
+  sizeStocks: Record<string, number>;
   colors: string[];
   material: string;
   description: string;
@@ -54,14 +55,36 @@ async function resolveCategoryId(name: string, gender: string): Promise<string> 
   return data.id;
 }
 
+/** Writes the seller's per-size stock inputs into product_size_inventory,
+ *  removing rows for sizes that are no longer offered. */
+async function syncSizeInventory(productId: string, sizeStocks: Record<string, number>): Promise<void> {
+  const sizes = Object.keys(sizeStocks);
+
+  const { error: delError } = await supabase
+    .from('product_size_inventory')
+    .delete()
+    .eq('product_id', productId)
+    .not('size', 'in', `(${sizes.map((s) => `"${s}"`).join(',')})`);
+  if (delError) throw new Error(delError.message);
+
+  const { error: upsertError } = await supabase
+    .from('product_size_inventory')
+    .upsert(
+      sizes.map((size) => ({ product_id: productId, size, stock: sizeStocks[size] })),
+      { onConflict: 'product_id,size' }
+    );
+  if (upsertError) throw new Error(upsertError.message);
+}
+
 export async function insertProduct(sellerId: string, input: ProductFormInput): Promise<void> {
   const [brandId, categoryId] = await Promise.all([
     resolveBrandId(input.brand),
     resolveCategoryId(input.subcategory, input.gender),
   ]);
 
+  const sizes = Object.keys(input.sizeStocks);
   const sku = `SEL-${Date.now()}`;
-  const { error } = await supabase.from('products').insert({
+  const { data, error } = await supabase.from('products').insert({
     seller_id: sellerId,
     brand_id: brandId,
     category_id: categoryId,
@@ -70,16 +93,18 @@ export async function insertProduct(sellerId: string, input: ProductFormInput): 
     gender: input.gender,
     price: input.price,
     original_price: input.original,
-    sizes: input.sizes,
+    sizes,
     colors: input.colors,
     material: input.material,
     care_instructions: 'Machine wash cold, hang dry. Do not bleach.',
-    stock: input.stock,
+    stock: 0, // auto-computed from product_size_inventory once inserted below
     sku,
     image_urls: [input.image],
     status: 'pending',
-  });
-  if (error) throw new Error(error.message);
+  }).select('id').single();
+  if (error || !data) throw new Error(error?.message ?? 'Failed to create product.');
+
+  await syncSizeInventory(data.id, input.sizeStocks);
 }
 
 export async function updateProduct(productId: string, sellerId: string, input: ProductFormInput): Promise<void> {
@@ -88,7 +113,8 @@ export async function updateProduct(productId: string, sellerId: string, input: 
     resolveCategoryId(input.subcategory, input.gender),
   ]);
 
-  const { error } = await supabase.from('products').update({
+  const sizes = Object.keys(input.sizeStocks);
+  const { data, error } = await supabase.from('products').update({
     brand_id: brandId,
     category_id: categoryId,
     name: input.name,
@@ -96,11 +122,12 @@ export async function updateProduct(productId: string, sellerId: string, input: 
     gender: input.gender,
     price: input.price,
     original_price: input.original,
-    sizes: input.sizes,
+    sizes,
     colors: input.colors,
     material: input.material,
-    stock: input.stock,
     image_urls: [input.image],
-  }).eq('id', productId).eq('seller_id', sellerId);
-  if (error) throw new Error(error.message);
+  }).eq('id', productId).eq('seller_id', sellerId).select('id').single();
+  if (error || !data) throw new Error(error?.message ?? 'Product update matched no rows — check permissions.');
+
+  await syncSizeInventory(productId, input.sizeStocks);
 }

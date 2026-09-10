@@ -20,67 +20,39 @@ export interface PlaceOrderInput {
   address: { name: string; phone: string; address: string; city: string; postal: string };
 }
 
-const DEFAULT_COMMISSION_RATE = 10.0;
 
 /**
- * Writes a real order + its line items to Supabase.
- * Throws on failure so the caller can show an error instead of
- * pretending the order succeeded.
+ * Places an order atomically via the `place_order` database function:
+ * inserts the order, decrements per-size stock, and inserts order_items
+ * all inside a single database transaction. If any item doesn't have
+ * enough stock, the whole order fails and nothing is written — no
+ * partial orders, no overselling.
  */
 export async function placeOrderInDb(input: PlaceOrderInput): Promise<{ id: string; orderNumber: string }> {
-  const orderNumber = 'TH-' + Math.random().toString(36).substring(2, 8).toUpperCase();
-
-  const { data: orderRow, error: orderError } = await supabase
-    .from('orders')
-    .insert({
-      user_id: input.userId,
-      order_number: orderNumber,
-      subtotal: input.subtotal,
-      discount: input.discount,
-      shipping: input.shipping,
-      total: input.total,
-      payment_method: input.paymentMethod,
-      payment_status: 'simulated',
-      status: 'confirmed',
-      shipping_snapshot: input.address,
-    })
-    .select('id, order_number')
-    .single();
-
-  if (orderError || !orderRow) {
-    throw new Error(orderError?.message ?? 'Failed to create order.');
-  }
-
-  const productIds = [...new Set(input.items.map((i) => i.id))];
-  const { data: productRows, error: productsError } = await supabase
-    .from('products')
-    .select('id, seller_id')
-    .in('id', productIds);
-
-  if (productsError) {
-    throw new Error(productsError.message);
-  }
-
-  const sellerIdByProduct = new Map((productRows ?? []).map((p) => [p.id, p.seller_id]));
-
-  const orderItemsPayload = input.items.map((item) => ({
-    order_id: orderRow.id,
+  const items = input.items.map((item) => ({
     product_id: item.id,
-    seller_id: sellerIdByProduct.get(item.id) ?? null,
     product_name: item.name,
     size: item.size,
     color: item.color,
     quantity: item.quantity,
     unit_price: item.price,
-    commission_rate: DEFAULT_COMMISSION_RATE,
   }));
 
-  const { error: itemsError } = await supabase.from('order_items').insert(orderItemsPayload);
-  if (itemsError) {
-    throw new Error(itemsError.message);
+  const { data, error } = await supabase.rpc('place_order', {
+    p_items: items,
+    p_subtotal: input.subtotal,
+    p_discount: input.discount,
+    p_shipping: input.shipping,
+    p_total: input.total,
+    p_payment_method: input.paymentMethod,
+    p_address: input.address,
+  });
+
+  if (error) {
+    throw new Error(error.message);
   }
 
-  return { id: orderRow.id, orderNumber: orderRow.order_number };
+  return { id: data.id, orderNumber: data.order_number };
 }
 
 // === Fetch order history for the current user ===
