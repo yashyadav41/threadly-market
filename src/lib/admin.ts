@@ -23,8 +23,9 @@ export async function fetchAllSellers(): Promise<AdminSellerRow[]> {
 }
 
 export async function setSellerStatus(sellerId: string, status: 'approved' | 'suspended'): Promise<void> {
-  const { error } = await supabase.from('sellers').update({ status }).eq('id', sellerId);
+  const { data, error } = await supabase.from('sellers').update({ status }).eq('id', sellerId).select('id');
   if (error) throw new Error(error.message);
+  if (!data || data.length === 0) throw new Error('Seller update matched no rows — check admin permissions.');
 }
 
 export interface PendingProduct {
@@ -63,6 +64,7 @@ export async function fetchPendingProducts(): Promise<PendingProduct[]> {
 }
 
 export async function setProductStatus(productId: string, status: 'approved' | 'rejected'): Promise<void> {
-  const { error } = await supabase.from('products').update({ status }).eq('id', productId);
+  const { data, error } = await supabase.from('products').update({ status }).eq('id', productId).select('id');
   if (error) throw new Error(error.message);
+  if (!data || data.length === 0) throw new Error('Product update matched no rows — check admin permissions.');
 }

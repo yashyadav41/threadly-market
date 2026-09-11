@@ -16,7 +16,10 @@ export async function fetchWishlistIds(userId: string): Promise<string[]> {
 
 /**
  * Replaces the user's entire saved wishlist with the given product IDs.
- * Simple "delete all, re-insert" approach — fine for typical wishlist sizes.
+ * Deletes rows no longer wishlisted, then upserts the current ones —
+ * upsert instead of a plain insert avoids a duplicate-key error if
+ * two syncs happen to overlap in quick succession (same fix already
+ * applied to cart.ts).
  */
 export async function replaceWishlistIds(userId: string, ids: string[]): Promise<void> {
   const { error: delError } = await supabase.from('wishlist_items').delete().eq('user_id', userId);
@@ -26,6 +29,6 @@ export async function replaceWishlistIds(userId: string, ids: string[]): Promise
 
   const { error: insError } = await supabase
     .from('wishlist_items')
-    .insert(ids.map((id) => ({ user_id: userId, product_id: id })));
+    .upsert(ids.map((id) => ({ user_id: userId, product_id: id })), { onConflict: 'user_id,product_id' });
   if (insError) console.error('replaceWishlistIds insert failed:', insError.message);
 }

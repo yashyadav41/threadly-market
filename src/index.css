@@ -1994,7 +1994,9 @@ a { color: inherit; text-decoration: none; }
   .dashboard { display: block; }
   .dashboard-side { width: 100%; padding: 18px; min-height: 0; }
   .dashboard-side .wordmark { margin-bottom: 16px; }
-  .dash-profile, .dashboard-side nav { display: none; }
+  .dash-profile { display: none; }
+  .dashboard-side nav { display: flex; flex-direction: row; overflow-x: auto; gap: 6px; padding-bottom: 4px; -webkit-overflow-scrolling: touch; }
+  .dashboard-side nav button { white-space: nowrap; flex-shrink: 0; }
   .back-store { margin: 0; }
   .dashboard-main { padding: 24px 5%; }
   .dashboard-top h1 { font-size: 26px; }

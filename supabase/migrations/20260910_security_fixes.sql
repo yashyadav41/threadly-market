@@ -15,14 +15,16 @@ WITH CHECK (
 
 -- FIX 2: sellers table also allowed a seller to UPDATE their own
 -- status field directly (e.g. reactivate themselves after being
--- suspended by an admin). A trigger silently keeps status unchanged
--- for any non-admin update, while still allowing legitimate self-edits
+-- suspended by an admin), and their own commission_rate (e.g. set
+-- it to 0%). A trigger silently keeps both fields unchanged for any
+-- non-admin update, while still allowing legitimate self-edits
 -- (business_name, description) to go through normally.
 CREATE OR REPLACE FUNCTION public.protect_seller_status() RETURNS trigger
 LANGUAGE plpgsql SECURITY DEFINER AS $$
 BEGIN
   IF NOT public.current_user_is_admin() THEN
     NEW.status := OLD.status;
+    NEW.commission_rate := OLD.commission_rate;
   END IF;
   RETURN NEW;
 END;
@@ -52,3 +54,13 @@ DROP TRIGGER IF EXISTS products_protect_status ON public.products;
 CREATE TRIGGER products_protect_status
 BEFORE UPDATE ON public.products
 FOR EACH ROW EXECUTE FUNCTION public.protect_product_status();
+
+-- FIX 4: seller_applications INSERT policy didn't restrict the
+-- `status` column, so a submitted application could claim
+-- status='approved' from the moment it's created (instead of the
+-- intended 'pending'). This doesn't grant real seller access on its
+-- own (only an actual `sellers` row does, per FIX 1 above), but it's
+-- misleading data an admin might otherwise trust at face value.
+DROP POLICY IF EXISTS "applications_insert_own" ON public.seller_applications;
+CREATE POLICY "applications_insert_own" ON public.seller_applications FOR INSERT TO authenticated
+WITH CHECK (user_id = auth.uid() AND status = 'pending');

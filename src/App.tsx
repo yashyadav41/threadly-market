@@ -832,7 +832,7 @@ function CartDrawer({ cart, setCart, subtotal, onClose, onCheckout }: { cart: Ca
 }
 
 // === CHECKOUT with all 3 payment methods ===
-function Checkout({ subtotal, cart, onClose, onComplete }: { subtotal: number; cart: CartItem[]; onClose: () => void; onComplete: (method: PaymentMethod, address: { name: string; phone: string; address: string; city: string; postal: string }) => void }) {
+function Checkout({ subtotal, cart, onClose, onComplete }: { subtotal: number; cart: CartItem[]; onClose: () => void; onComplete: (method: PaymentMethod, address: { name: string; phone: string; address: string; city: string; postal: string }) => Promise<void> | void }) {
   const [step, setStep] = useState(1);
   const [delivery, setDelivery] = useState('standard');
   const [payMethod, setPayMethod] = useState<PaymentMethod>('demo_card');
@@ -840,6 +840,7 @@ function Checkout({ subtotal, cart, onClose, onComplete }: { subtotal: number; c
   const [upi, setUpi] = useState('');
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [addr, setAddr] = useState({ name: '', phone: '', address: '', city: '', postal: '' });
+  const [placingOrder, setPlacingOrder] = useState(false);
 
   const shipping = delivery === 'express' ? 149 : (subtotal >= 1499 ? 0 : 99);
   const total = subtotal + shipping;
@@ -872,8 +873,15 @@ function Checkout({ subtotal, cart, onClose, onComplete }: { subtotal: number; c
     setErrors(e); return Object.keys(e).length === 0;
   };
 
-  const handlePlaceOrder = () => {
-    if (validatePayment()) onComplete(payMethod, addr);
+  const handlePlaceOrder = async () => {
+    if (placingOrder) return;
+    if (!validatePayment()) return;
+    setPlacingOrder(true);
+    try {
+      await onComplete(payMethod, addr);
+    } finally {
+      setPlacingOrder(false);
+    }
   };
 
   return <div className="modal-backdrop"><div className="checkout-modal">
@@ -940,7 +948,7 @@ function Checkout({ subtotal, cart, onClose, onComplete }: { subtotal: number; c
 
         {payMethod === 'cod_demo' && <div className="cod-info"><Banknote size={20} /> <span>Pay with cash when your order is delivered. No card or UPI details needed.</span></div>}
 
-        <div className="step-nav"><button className="text-button" onClick={() => setStep(2)}><ChevronLeft size={15} /> Back</button><button className="button button-dark" onClick={handlePlaceOrder}><Check size={16} /> Place {payMethod === 'demo_card' ? 'Card' : payMethod === 'demo_upi' ? 'UPI' : 'COD'} Order</button></div>
+        <div className="step-nav"><button className="text-button" onClick={() => setStep(2)}><ChevronLeft size={15} /> Back</button><button className="button button-dark" onClick={handlePlaceOrder} disabled={placingOrder}><Check size={16} /> {placingOrder ? 'Placing order…' : `Place ${payMethod === 'demo_card' ? 'Card' : payMethod === 'demo_upi' ? 'UPI' : 'COD'} Order`}</button></div>
       </div>
       <OrderSummary subtotal={subtotal} shipping={shipping} total={total} cartItems={cart} />
     </div>}
@@ -1059,7 +1067,7 @@ function ProductFormModal({ mode, product, sellerId, allProducts, onClose, onSav
       setError('Please fill in all required fields.');
       return;
     }
-    if (sizeList.some((sz) => !sizeStockInputs[sz] || Number(sizeStockInputs[sz]) < 0)) {
+    if (sizeList.some((sz) => !sizeStockInputs[sz] || isNaN(Number(sizeStockInputs[sz])) || Number(sizeStockInputs[sz]) < 0)) {
       setError('Please enter stock for every size.');
       return;
     }

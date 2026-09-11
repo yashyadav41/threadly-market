@@ -21,6 +21,14 @@ export async function signUp(email: string, password: string, fullName: string) 
   if (error) throw error;
   if (!data.user) throw new Error('Sign up succeeded but no user was returned.');
 
+  if (!data.session) {
+    // Email confirmation is required on this project — there's no active
+    // session yet, so the profile/role rows can't be created until the
+    // user confirms and logs in. Surface a clear message instead of
+    // letting the next inserts fail with a confusing RLS error.
+    throw new Error('Please check your email to confirm your account, then log in.');
+  }
+
   const userId = data.user.id;
 
   const { error: profileError } = await supabase
