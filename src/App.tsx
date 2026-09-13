@@ -16,7 +16,7 @@ import { signOut } from './lib/auth';
 import { fetchProducts } from './lib/products';
 import { fetchCartRows, replaceCartRows } from './lib/cart';
 import { fetchWishlistIds, replaceWishlistIds } from './lib/wishlist';
-import { placeOrderInDb, fetchOrdersForUser } from './lib/orders';
+import { placeOrderInDb, fetchOrdersForUser, fetchAllOrdersForAdmin, fetchOrdersForSeller } from './lib/orders';
 import { fetchSellerByUserId, updateSellerDescription, insertProduct, updateProduct, type SellerRecord } from './lib/sellers';
 import { fetchMyApplication, submitApplication, fetchAllApplications, approveApplication, rejectApplication, type SellerApplication, type ApplicationInput } from './lib/sellerApplications';
 import { fetchAllSellers, setSellerStatus, fetchPendingProducts, setProductStatus, type AdminSellerRow, type PendingProduct } from './lib/admin';
@@ -109,15 +109,6 @@ function App() {
     replaceWishlistIds(profile.id, wishlist);
   }, [wishlist, profile]);
 
-  useEffect(() => {
-    if (!profile) return;
-    let active = true;
-    fetchOrdersForUser(profile.id, profile.fullName || profile.email).then((fetched) => {
-      if (active && fetched.length > 0) setOrders(fetched);
-    });
-    return () => { active = false; };
-  }, [profile?.id]);
-
   const [sellerRecord, setSellerRecord] = useState<SellerRecord | null>(null);
   const [refreshSellerFlag, setRefreshSellerFlag] = useState(0);
   useEffect(() => {
@@ -136,6 +127,35 @@ function App() {
   }, [profile?.id, refreshSellerFlag]);
 
   const isAdmin = profile?.role === 'admin';
+
+  // === ORDERS: fetch the dataset appropriate to who's logged in ===
+  // Customer -> their own purchase history. Seller -> orders containing
+  // their products (real seller_id, not name-matching). Admin -> every
+  // platform order. Never the customer's personal history reused for
+  // the other two roles (that was the root cause of a real bug).
+  useEffect(() => {
+    if (!profile) { setOrders([]); return; }
+    let active = true;
+    const load = async () => {
+      try {
+        let fetched;
+        if (isAdmin) {
+          fetched = await fetchAllOrdersForAdmin();
+        } else if (sellerRecord) {
+          fetched = await fetchOrdersForSeller(sellerRecord.id);
+        } else {
+          fetched = await fetchOrdersForUser(profile.id, profile.fullName || profile.email);
+        }
+        if (active) setOrders(fetched);
+      } catch (err) {
+        console.error('Failed to load orders:', err);
+        if (active) setOrders([]);
+      }
+    };
+    load();
+    return () => { active = false; };
+  }, [profile?.id, isAdmin, sellerRecord?.id]);
+
   const [allApplications, setAllApplications] = useState<SellerApplication[]>([]);
   const [allSellersAdmin, setAllSellersAdmin] = useState<AdminSellerRow[]>([]);
   const [pendingProducts, setPendingProducts] = useState<PendingProduct[]>([]);
@@ -1200,8 +1220,10 @@ function SellerDashboard({ tab, setTab, onBack, orders, products, allProducts, s
     return <SellerApplicationForm rejected={application?.status === 'rejected'} onBack={onBack} onSubmit={onSubmitApplication} />;
   }
   const sellerName = seller.business_name;
-  const sellerOrders = orders.filter((o) => o.items.some((i) => i.seller === sellerName));
-  const sellerOrderItems = sellerOrders.flatMap((o) => o.items.filter((i) => i.seller === sellerName).map((i) => ({ ...i, orderId: o.id, date: o.date, status: o.status, customer: o.customer, paymentLabel: o.paymentLabel })));
+  // `orders` is now fetched via fetchOrdersForSeller(sellerRecord.id) — already
+  // scoped to real seller_id relationships, so no name-matching filter needed here.
+  const sellerOrders = orders;
+  const sellerOrderItems = sellerOrders.flatMap((o) => o.items.map((i) => ({ ...i, orderId: o.id, date: o.date, status: o.status, customer: o.customer, paymentLabel: o.paymentLabel })));
   const grossSales = sellerOrderItems.reduce((s, i) => s + i.price * i.quantity, 0);
   const commission = grossSales * COMMISSION_RATE;
   const netEarnings = grossSales - commission;
