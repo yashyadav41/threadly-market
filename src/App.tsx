@@ -396,9 +396,9 @@ function App() {
     {view === 'shop' && <Shop products={filtered} shop={shop} setShop={setShop} onProduct={setSelected} wishlist={wishlist} toggleWish={toggleWish} onNavShop={navShop} />}
     {view === 'brands' && <Brands onBrand={(b) => { setShop({ ...DEFAULT_SHOP, selectedBrands: [b] }); navTo('shop'); }} />}
     {view === 'wishlist' && <Wishlist items={products.filter((p) => wishlist.includes(p.id))} onProduct={setSelected} toggleWish={toggleWish} onMoveToCart={addToCart} />}
-    {view === 'orders' && <Orders orders={orders} onView={(id) => { setOrderDetailId(id); navTo('orderDetail'); }} />}
+    {view === 'orders' && <Orders orders={orders} onView={(id) => { setOrderDetailId(id); navTo('orderDetail'); }} onHome={() => navTo('home')} />}
     {view === 'orderDetail' && orderDetail && <OrderDetail order={orderDetail} onBack={() => navTo('orders')} />}
-    {view === 'account' && <Account role={role} setRole={setRole} onSeller={goSeller} onAdmin={goAdmin} orders={orders} onViewOrder={(id) => { setOrderDetailId(id); navTo('orderDetail'); }} profile={profile} onLoginClick={() => setAuthModalOpen(true)} onLogout={async () => { await signOut(); refreshAuth(); }} />}
+    {view === 'account' && <Account role={role} setRole={setRole} onSeller={goSeller} onAdmin={goAdmin} orders={orders} onViewOrders={() => navTo('orders')} profile={profile} onLoginClick={() => setAuthModalOpen(true)} onLogout={async () => { await signOut(); refreshAuth(); }} />}
     {view === 'seller' && <SellerDashboard tab={sellerTab} setTab={setSellerTab} onBack={() => navTo('home')} orders={orders} products={sellerRecord ? products.filter((p) => p.seller === sellerRecord.business_name) : []} allProducts={products} seller={sellerRecord} onProduct={setSelected} onViewOrder={(id) => { setOrderDetailId(id); navTo('orderDetail'); }} onAddProduct={() => setProductForm({ mode: 'add' })} onEditProduct={(p) => setProductForm({ mode: 'edit', product: p })} onSaveProfile={async (desc) => { if (!sellerRecord) return; try { await updateSellerDescription(sellerRecord.id, desc); setSellerRecord({ ...sellerRecord, description: desc }); showToast('Store profile updated'); } catch { showToast('Failed to update profile'); } }} application={myApplication} onSubmitApplication={async (input) => { if (!profile) return; await submitApplication(profile.id, input); setRefreshSellerFlag((f) => f + 1); }} />}
     {view === 'admin' && <AdminDashboard tab={adminTab} setTab={setAdminTab} onBack={() => navTo('home')} orders={orders} products={products} onViewOrder={(id) => { setOrderDetailId(id); navTo('orderDetail'); }}
       applications={allApplications} sellersAdmin={allSellersAdmin} pendingProducts={pendingProducts}
@@ -986,11 +986,11 @@ function OrderSummary({ subtotal, shipping, total, cartItems }: { subtotal: numb
 }
 
 // === ORDERS ===
-function Orders({ orders, onView }: { orders: Order[]; onView: (id: string) => void }) {
+function Orders({ orders, onView, onHome }: { orders: Order[]; onView: (id: string) => void; onHome: () => void }) {
   const statusIcon = (s: string) => s === 'Delivered' ? <CheckCircle size={14} /> : s === 'Cancelled' ? <XCircle size={14} /> : s === 'Shipped' ? <Truck size={14} /> : <Clock size={14} />;
   return <main className="shop-page">
     <div className="page-intro compact">
-      <Breadcrumbs items={[{ label: 'Home', onClick: () => onView('') }, { label: 'My Orders' }]} />
+      <Breadcrumbs items={[{ label: 'Home', onClick: onHome }, { label: 'My Orders' }]} />
       <h1>My Orders</h1>
       <p>{orders.length} {orders.length === 1 ? 'order' : 'orders'} placed.</p>
     </div>
@@ -1030,7 +1030,7 @@ function OrderDetail({ order, onBack }: { order: Order; onBack: () => void }) {
 }
 
 // === ACCOUNT ===
-function Account({ role, setRole, onSeller, onAdmin, orders, onViewOrder, profile, onLoginClick, onLogout }: { role: Role; setRole: (r: Role) => void; onSeller: () => void; onAdmin: () => void; orders: Order[]; onViewOrder: (id: string) => void; profile: import('./lib/auth').AuthProfile | null; onLoginClick: () => void; onLogout: () => void }) {
+function Account({ role, setRole, onSeller, onAdmin, orders, onViewOrders, profile, onLoginClick, onLogout }: { role: Role; setRole: (r: Role) => void; onSeller: () => void; onAdmin: () => void; orders: Order[]; onViewOrders: () => void; profile: import('./lib/auth').AuthProfile | null; onLoginClick: () => void; onLogout: () => void }) {
   if (!profile) {
     return <main className="account-page">
       <div className="account-hero"><div className="avatar">?</div><div><p className="eyebrow">You're not logged in</p><h1>Welcome to Threadly</h1><p>Log in or create an account to view your orders and wishlist.</p></div></div>
@@ -1044,7 +1044,7 @@ function Account({ role, setRole, onSeller, onAdmin, orders, onViewOrder, profil
     <div className="role-switch"><span>Demo role:</span>{(['customer', 'seller', 'admin'] as const).map((r) => <button className={role === r ? 'active' : ''} key={r} onClick={() => { setRole(r); if (r === 'seller') onSeller(); else if (r === 'admin') onAdmin(); }}>{r}</button>)}</div>
     
     <div className="account-grid">
-      <div className="account-card"><p className="eyebrow">Recent orders</p><h2>{orders.length}</h2><p>{orders.length === 0 ? 'No orders yet.' : `Last order: ${orders[0].id}`}</p>{orders.length > 0 && <button className="text-button" onClick={() => onViewOrder(orders[0].id)}>View latest <ArrowRight size={15} /></button>}</div>
+      <div className="account-card"><p className="eyebrow">Recent orders</p><h2>{orders.length}</h2><p>{orders.length === 0 ? 'No orders yet.' : `Last order: ${orders[0].id}`}</p>{orders.length > 0 && <button className="text-button" onClick={onViewOrders}>View latest <ArrowRight size={15} /></button>}</div>
       <div className="account-card"><p className="eyebrow">Your details</p><h2>Profile</h2><p>Manage your name, email, phone and saved addresses.</p><button className="text-button">Manage profile <ArrowRight size={15} /></button></div>
       <div className="account-card dark-card"><p className="eyebrow">For independent labels</p><h2>Sell on Threadly</h2><p>Bring your point of view to a thoughtful, growing community.</p><button className="button button-light" onClick={onSeller}>Explore selling <ArrowRight size={15} /></button></div>
     </div>
