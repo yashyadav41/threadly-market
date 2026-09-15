@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { X } from 'lucide-react';
+import { X, MailCheck } from 'lucide-react';
 import { signIn, signUp } from './lib/auth';
 
 interface AuthModalProps {
@@ -14,6 +14,7 @@ export function AuthModal({ onClose, onSuccess }: AuthModalProps) {
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
   const [submitting, setSubmitting] = useState(false);
+  const [confirmationSent, setConfirmationSent] = useState(false);
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -31,16 +32,43 @@ export function AuthModal({ onClose, onSuccess }: AuthModalProps) {
     setSubmitting(true);
     try {
       if (mode === 'signup') {
-        await signUp(email, password, fullName);
+        const result = await signUp(email, password, fullName);
+        if (result.status === 'confirmation_required') {
+          setConfirmationSent(true);
+          setSubmitting(false);
+          return;
+        }
       } else {
         await signIn(email, password);
       }
       onSuccess();
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Something went wrong. Please try again.');
-    } finally {
       setSubmitting(false);
     }
+  }
+
+  if (confirmationSent) {
+    return (
+      <div className="modal-backdrop" onClick={onClose}>
+        <div className="auth-modal-box" onClick={(e) => e.stopPropagation()}>
+          <button className="close-btn" onClick={onClose} aria-label="Close"><X size={18} /></button>
+          <div style={{ textAlign: 'center', padding: '12px 0' }}>
+            <MailCheck size={40} style={{ marginBottom: 12 }} />
+            <p className="eyebrow">Almost there</p>
+            <h2>Check your email</h2>
+            <p style={{ marginTop: 8 }}>We've sent a confirmation link to <strong>{email}</strong>. Click it, then come back and log in.</p>
+            <button
+              className="button button-dark"
+              style={{ marginTop: 20 }}
+              onClick={() => { setConfirmationSent(false); setMode('login'); setPassword(''); }}
+            >
+              Back to log in
+            </button>
+          </div>
+        </div>
+      </div>
+    );
   }
 
   return (

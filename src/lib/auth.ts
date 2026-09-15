@@ -9,12 +9,26 @@ export interface AuthProfile {
   role: UserRole;
 }
 
-export async function signUp(email: string, password: string, fullName: string) {
+export interface SignUpResult {
+  /** 'confirmed' = signed in immediately. 'confirmation_required' = check email before logging in. */
+  status: 'confirmed' | 'confirmation_required';
+}
+
+/**
+ * Signs up a new user. Profile and role rows are created automatically
+ * by the `handle_new_user` database trigger (fires on every new
+ * auth.users row, regardless of email-confirmation state) — this
+ * function no longer inserts them from the client, since there may be
+ * no active session yet to satisfy the old RLS-gated inserts when
+ * email confirmation is required.
+ */
+export async function signUp(email: string, password: string, fullName: string): Promise<SignUpResult> {
   const { data, error } = await supabase.auth.signUp({
     email,
     password,
     options: {
       data: { full_name: fullName },
+      emailRedirectTo: window.location.origin,
     },
   });
 
@@ -22,26 +36,13 @@ export async function signUp(email: string, password: string, fullName: string) 
   if (!data.user) throw new Error('Sign up succeeded but no user was returned.');
 
   if (!data.session) {
-    // Email confirmation is required on this project — there's no active
-    // session yet, so the profile/role rows can't be created until the
-    // user confirms and logs in. Surface a clear message instead of
-    // letting the next inserts fail with a confusing RLS error.
-    throw new Error('Please check your email to confirm your account, then log in.');
+    // Email confirmation is required on this project. This is a
+    // successful signup, not a failure — the account (and its profile
+    // and customer role, via the database trigger) already exists.
+    return { status: 'confirmation_required' };
   }
 
-  const userId = data.user.id;
-
-  const { error: profileError } = await supabase
-    .from('profiles')
-    .insert({ id: userId, display_name: fullName });
-  if (profileError) throw profileError;
-
-  const { error: roleError } = await supabase
-    .from('user_roles')
-    .insert({ user_id: userId, role: 'customer' });
-  if (roleError) throw roleError;
-
-  return data;
+  return { status: 'confirmed' };
 }
 
 export async function signIn(email: string, password: string) {
